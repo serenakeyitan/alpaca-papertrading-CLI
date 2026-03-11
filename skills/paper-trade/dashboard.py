@@ -481,7 +481,7 @@ class TradingTerminal(App):
         yield Static("", id="status-line")
         with Container(id="command-bar"):
             yield Input(
-                placeholder=" Press / to type  |  buy/sell NVDA 10  |  close all  |  watch apple  |  /exit or /quit to quit",
+                placeholder=" Press / to type  |  buy/sell NVDA 10  |  watch apple  |  /quit to exit",
                 id="cmd-input"
             )
 
@@ -506,7 +506,7 @@ class TradingTerminal(App):
         ot.cursor_type = "row"
         ot.add_columns("Time", "Side", "Symbol", "Qty", "Type", "Limit", "Status", "Strategy")
 
-        self._log("Terminal started")
+        self._log(f"[dim]{datetime.now().strftime('%m/%d %H:%M:%S')}[/]  Terminal started")
         self.refresh_all()
 
         self.set_interval(2, self.refresh_prices)
@@ -809,7 +809,7 @@ class TradingTerminal(App):
         for s in summary["strategies"]:
             old = old_statuses.get(s["name"])
             if old and old != s["status"]:
-                ts = datetime.now().strftime("%H:%M:%S")
+                ts = datetime.now().strftime("%m/%d %H:%M:%S")
                 status_text, sc = STATUS_STYLES.get(s["status"], (s["status"], "white"))
                 self.app.call_from_thread(
                     self._log,
@@ -917,7 +917,7 @@ class TradingTerminal(App):
             for o in orders:
                 if o.id not in new_ids:
                     continue
-                ts = datetime.now().strftime("%H:%M:%S")
+                ts = datetime.now().strftime("%m/%d %H:%M:%S")
                 cid = o.client_order_id or ""
                 strat = ""
                 for s in self.sm.strategies.values():
@@ -958,8 +958,14 @@ class TradingTerminal(App):
 
     # ── Actions ───────────────────────────────────────────
 
+    def action_quit(self):
+        self._shutting_down = True
+        self.workers.cancel_all()
+        import os, signal
+        os.kill(os.getpid(), signal.SIGTERM)
+
     def action_refresh(self):
-        self._log(f"[dim]{datetime.now().strftime('%H:%M:%S')}[/]  [cyan]Refreshing...[/]")
+        self._log(f"[dim]{datetime.now().strftime('%m/%d %H:%M:%S')}[/]  [cyan]Refreshing...[/]")
         self.refresh_all()
 
     def action_focus_cmd(self):
@@ -976,7 +982,7 @@ class TradingTerminal(App):
         if not cmd:
             return
 
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = datetime.now().strftime("%m/%d %H:%M:%S")
         known_strats = list(self.sm.strategies.keys()) if hasattr(self, 'sm') else []
         intent = parse_intent(cmd, known_strats)
         action = intent["action"]
@@ -985,7 +991,8 @@ class TradingTerminal(App):
             if action == "quit":
                 self._shutting_down = True
                 self.workers.cancel_all()
-                self.exit()
+                import os, signal
+                os.kill(os.getpid(), signal.SIGTERM)
             elif action == "refresh":
                 self.action_refresh()
             elif action == "tick":
