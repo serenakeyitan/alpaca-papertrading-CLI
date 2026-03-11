@@ -1,0 +1,15 @@
+# API keys
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# State/logs (generated at runtime)
+strategies_state.json
+grid_state.json
+grid_bot.log
+strategy_manager.log
+tick.log
+price_cache.json
