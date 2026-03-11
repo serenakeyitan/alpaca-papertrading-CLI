@@ -28,10 +28,8 @@ A terminal-based paper trading system powered by [Alpaca Markets](https://alpaca
 git clone https://github.com/serenakeyitan/alpaca-papertrading-CLI.git
 cd alpaca-papertrading-CLI
 
-# 2. Set up Python environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+# 2. Auto-install everything (Python, tmux, pip, CLI)
+bash scripts/setup-deps.sh
 
 # 3. Configure API keys (get from https://app.alpaca.markets/paper/dashboard/overview)
 alpaca configure init
@@ -40,15 +38,104 @@ alpaca configure init
 alpaca account summary
 alpaca orders market AAPL 10 --side buy
 alpaca positions list
+
+# 5. Launch tmux trading workspace
+bash scripts/tmux-trading.sh
 ```
 
-## Installation
+## System Requirements
+
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| Python | 3.10+ | Runtime |
+| pip | latest | Package manager |
+| tmux | any | Multi-pane trading workspace |
+| git | any | Version control |
+
+### Auto-install (recommended)
 
 ```bash
+bash scripts/setup-deps.sh
+```
+
+Detects your OS and installs everything automatically:
+
+| OS | Package Manager | Tested |
+|----|-----------------|--------|
+| macOS | Homebrew | Yes |
+| Ubuntu / Debian | apt | Yes |
+| Fedora / RHEL | dnf | Yes |
+| Arch / Manjaro | pacman | Yes |
+| Alpine | apk | Yes |
+| Windows | WSL required | Yes (via WSL) |
+
+### Manual install
+
+```bash
+# macOS
+brew install python tmux git
+
+# Ubuntu / Debian
+sudo apt install python3 python3-pip python3-venv tmux git
+
+# Fedora
+sudo dnf install python3 python3-pip tmux git
+
+# Arch
+sudo pacman -S python python-pip tmux git
+
+# Then install the CLI
 pip install -e .
 ```
 
-This installs the `alpaca` command globally. Dependencies: `click`, `alpaca-py`, `python-dotenv`, `rich`.
+Python packages: `click`, `alpaca-py`, `python-dotenv`, `rich`.
+
+## tmux Trading Workspace
+
+Launch a Bloomberg-style multi-pane trading terminal:
+
+```bash
+bash scripts/tmux-trading.sh
+```
+
+```
++---------------------+---------------------+
+|   PORTFOLIO         |   LIVE QUOTES       |
+|   (auto-refresh)    |   (watchlist)       |
++---------------------+---------------------+
+|   TRADING SHELL     |   ORDERS / STATS    |
+|   (type commands)   |   (auto-refresh)    |
++---------------------+---------------------+
+       Window 2: Technical indicators (auto-refresh)
+```
+
+Options:
+
+```bash
+# Custom session name
+bash scripts/tmux-trading.sh --session my-trading
+
+# Custom watchlist
+bash scripts/tmux-trading.sh --watchlist "AAPL MSFT BTC/USD ETH/USD SOL/USD"
+
+# Faster refresh (every 10 seconds)
+bash scripts/tmux-trading.sh --refresh 10
+
+# Create in background
+bash scripts/tmux-trading.sh --no-attach
+
+# Reattach to running session
+tmux attach -t paper-trade
+
+# Kill session
+tmux kill-session -t paper-trade
+```
+
+Keyboard shortcuts (inside tmux):
+- `Ctrl+B, D` — detach (session keeps running)
+- `Ctrl+B, Arrow` — switch panes
+- `Ctrl+B, N` — next window (market indicators)
+- `Ctrl+B, P` — previous window
 
 ## Configuration
 
@@ -144,11 +231,16 @@ python tick.py   # Auto-tick (run via cron)
 ## Architecture
 
 ```
-alpaca_cli/                # Click-based CLI (new)
-  cli.py                   # Main entry point
+scripts/
+  setup-deps.sh            # Cross-OS dependency installer (Python, tmux, pip, git)
+  install.sh               # Claude Code skill installer (symlinks + pip)
+  tmux-trading.sh          # Multi-pane tmux trading workspace
+
+alpaca_cli/                # Click-based CLI
+  cli.py                   # Main entry point (`alpaca` command)
   commands/
     account.py             # Account info, buying power
-    orders.py              # All order types
+    orders.py              # All order types (market/limit/stop/bracket/trailing)
     positions.py           # Position management
     market.py              # Quotes, bars, indicators
     watchlist.py           # Alpaca watchlists
@@ -156,10 +248,14 @@ alpaca_cli/                # Click-based CLI (new)
     strategy.py            # Strategy framework
     configure.py           # Configuration
   utils/
-    config.py              # Config management
-    client.py              # Alpaca client wrapper
-    output.py              # Rich formatted output
-    indicators.py          # Technical indicators (RSI, SMA, EMA, MACD, BBands)
+    config.py              # Config management (.env + JSON)
+    client.py              # Alpaca client wrapper (paper=True)
+    output.py              # Rich formatted output with fallback
+    indicators.py          # Technical indicators (RSI, SMA, EMA, MACD, BBands, VWAP)
+
+SKILL.md                   # Claude Code skill definition
+.claude-plugin/plugin.json # Plugin metadata
+marketplace-entry.json     # Skill store listing
 
 trade.py                   # Legacy CLI entry point
 dashboard.py               # Textual TUI dashboard

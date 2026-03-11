@@ -45,15 +45,87 @@ The user will speak in natural language. Map their intent to CLI commands:
 | "how am I doing" | `alpaca analytics stats` |
 | "run DCA $200 into SPY" | `alpaca strategy run dca -p symbol=SPY -p amount=200` |
 | "rebalance 50% AAPL 50% MSFT" | `alpaca strategy run rebalance -p 'targets={"AAPL":0.5,"MSFT":0.5}'` |
+| "open trading workspace" | `bash scripts/tmux-trading.sh` |
+| "launch trading terminal" | `bash scripts/tmux-trading.sh` |
+| "start dashboard" | `bash scripts/tmux-trading.sh` |
+| "install dependencies" | `bash scripts/setup-deps.sh` |
+| "set up everything" | `bash scripts/setup-deps.sh` |
 
-## Setup
+## Prerequisites & Setup
 
-The CLI is installed at the project root. To use it:
+### System dependencies (auto-installs for macOS, Ubuntu, Fedora, Arch, Alpine)
 
 ```bash
-cd /Users/keyitan/alpaca-papertrading-CLI
+bash scripts/setup-deps.sh
+```
+
+This installs: Python 3.10+, pip, tmux, git, and the `alpaca` CLI itself.
+Works on macOS (Homebrew), Debian/Ubuntu (apt), Fedora (dnf), Arch (pacman), Alpine (apk).
+For Windows, use WSL first.
+
+### Manual setup
+
+```bash
+# macOS
+brew install python tmux
+
+# Ubuntu/Debian
+sudo apt install python3 python3-pip tmux
+
+# Fedora
+sudo dnf install python3 python3-pip tmux
+
+# Arch
+sudo pacman -S python python-pip tmux
+
+# Then install the CLI
 pip install -e .
 alpaca configure init
+```
+
+## tmux Trading Workspace
+
+Launch a multi-pane Bloomberg-style trading terminal:
+
+```bash
+bash scripts/tmux-trading.sh
+```
+
+Layout:
+```
++---------------------+---------------------+
+|   PORTFOLIO         |   LIVE QUOTES       |
+|   (auto-refresh)    |   (watchlist)       |
++---------------------+---------------------+
+|   TRADING SHELL     |   ORDERS / STATS    |
+|   (type commands)   |   (auto-refresh)    |
++---------------------+---------------------+
+```
+
+Options:
+```bash
+# Custom session name
+bash scripts/tmux-trading.sh --session my-trading
+
+# Custom watchlist symbols
+bash scripts/tmux-trading.sh --watchlist "AAPL MSFT BTC/USD ETH/USD SOL/USD"
+
+# Faster refresh (10 seconds)
+bash scripts/tmux-trading.sh --refresh 10
+
+# Create in background (don't attach)
+bash scripts/tmux-trading.sh --no-attach
+
+# Reattach later
+tmux attach -t paper-trade
+
+# Kill session
+tmux kill-session -t paper-trade
+```
+
+When user asks to "open trading workspace" or "launch terminal" or "start dashboard":
+```bash
+bash scripts/tmux-trading.sh
 ```
 
 ## Key Rules
