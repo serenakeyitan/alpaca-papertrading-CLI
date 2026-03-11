@@ -160,12 +160,12 @@ def _extract_symbol(text):
     # Then look for uppercase tickers in original text
     for word in text.split():
         clean = word.strip("$,.!?")
-        if clean.isalpha() and 1 <= len(clean) <= 5 and clean.upper() == clean and clean.lower() not in _STOP_WORDS:
+        if clean.isalpha() and 1 <= len(clean) <= 8 and clean.upper() == clean and clean.lower() not in _STOP_WORDS:
             return clean.upper()
     # Then look for any word that could be a ticker (not a stop word)
     for word in words:
         clean = word.strip("$,.!?")
-        if clean.isalpha() and 1 <= len(clean) <= 5 and clean not in _STOP_WORDS:
+        if clean.isalpha() and 1 <= len(clean) <= 8 and clean not in _STOP_WORDS:
             return clean.upper()
     return None
 
@@ -283,7 +283,7 @@ def parse_intent(cmd, known_strategy_names=None):
         return result
 
     # ── Watch intent ──
-    watch_add = r'\b(watch|track|monitor|add\s*to\s*watch|follow)\b'
+    watch_add = r'\b(watch|track|monitor|follow)\b|add\b.*\bwatch'
     watch_rm = r'\b(unwatch|untrack|stop\s*watch)\b|remove\b.*\bwatch|drop\b.*\bwatch'
     if re.search(watch_rm, lower):
         result["action"] = "unwatch"
@@ -876,7 +876,7 @@ class TradingTerminal(App):
                         break
 
                 rows.append({
-                    "time": o.submitted_at.strftime("%H:%M:%S") if o.submitted_at else "---",
+                    "time": o.submitted_at.strftime("%m/%d %H:%M") if o.submitted_at else "---",
                     "side": o.side,
                     "symbol": o.symbol,
                     "qty": str(o.qty or "---"),
@@ -917,7 +917,12 @@ class TradingTerminal(App):
             for o in orders:
                 if o.id not in new_ids:
                     continue
-                ts = datetime.now().strftime("%m/%d %H:%M:%S")
+                # Use the actual order timestamp from API
+                order_time = o.filled_at or o.updated_at or o.submitted_at
+                if order_time:
+                    ts = order_time.strftime("%m/%d %H:%M:%S")
+                else:
+                    ts = datetime.now().strftime("%m/%d %H:%M:%S")
                 cid = o.client_order_id or ""
                 strat = ""
                 for s in self.sm.strategies.values():
