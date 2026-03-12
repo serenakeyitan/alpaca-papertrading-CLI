@@ -25,7 +25,6 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
 from textual.widgets import Static, Input, DataTable, RichLog
 from textual.binding import Binding
-from textual.design import ColorSystem
 from textual import work
 from rich.text import Text
 
@@ -417,8 +416,7 @@ Screen { background: #000000; color: #c8d6e5; scrollbar-size: 0 0; }
 
 DataTable { height: 1fr; background: #000000; }
 DataTable > .datatable--header { background: #111111; color: #00d4aa; text-style: bold; }
-DataTable > .datatable--cursor { background: #0a1a2a; }
-DataTable:focus > .datatable--cursor { background: #112233; }
+DataTable:focus { border: none; }
 
 RichLog { height: 1fr; background: #000000; padding: 0 1; scrollbar-size: 1 1; }
 
@@ -434,25 +432,6 @@ class TradingTerminal(App):
     CSS = CSS
     TITLE = "OpenClaw Terminal"
     DARK = True
-
-    # Override design to prevent cursor from forcing text color
-    design = {
-        "dark": ColorSystem(
-            primary="#00d4aa",
-            background="#000000",
-            surface="#000000",
-            foreground="#c8d6e5",
-            dark=True,
-            variables={
-                "block-cursor-background": "#112233",
-                "block-cursor-foreground": "#c8d6e5",
-                "block-cursor-blurred-background": "#0a1a2a",
-                "block-cursor-blurred-foreground": "#c8d6e5",
-                "block-cursor-text-style": "none",
-                "block-cursor-blurred-text-style": "none",
-            },
-        ),
-    }
 
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
@@ -514,24 +493,24 @@ class TradingTerminal(App):
         sys.stdout.write("\033[?1000l\033[?1003l\033[?1006l\033[?1015l")
         sys.stdout.flush()
 
-        # Watchlist columns
+        # Watchlist columns — no cursor, pure monitor
         wt = self.query_one("#watch-table", DataTable)
-        wt.cursor_type = "row"
+        wt.cursor_type = "none"
         wt.add_columns(" #", "MARKET", "Price", "Chg", "Trend")
 
         # Positions columns
         pt = self.query_one("#pos-table", DataTable)
-        pt.cursor_type = "row"
+        pt.cursor_type = "none"
         pt.add_columns("POSITIONS", "Qty", "Price", "P&L", "P&L%")
 
         # Strategy columns
         st = self.query_one("#strat-table", DataTable)
-        st.cursor_type = "row"
+        st.cursor_type = "none"
         st.add_columns("Name", "Type", "Status", "Capital", "Used", "Real P&L", "Unrl P&L", "Total P&L", "Fills", "Last Tick")
 
         # Orders columns
         ot = self.query_one("#order-table", DataTable)
-        ot.cursor_type = "row"
+        ot.cursor_type = "none"
         ot.add_columns("Time", "Side", "Symbol", "Qty", "Type", "Limit", "Status", "Strategy")
 
         self._log(f"[dim]{datetime.now().strftime('%m/%d %H:%M:%S')}[/]  Terminal started")
