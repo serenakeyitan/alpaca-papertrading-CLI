@@ -388,27 +388,56 @@ def _load_order_history():
         _log_entry(f"Error loading history: {e}", "dim")
 
 
-@app.route("/api/bars/<symbol>")
+@app.route("/api/bars/<path:symbol>")
 def api_bars(symbol):
     try:
-        api = _get_api()
+        cfg = _load_config()
+        headers = {
+            "APCA-API-KEY-ID": cfg["api_key"],
+            "APCA-API-SECRET-KEY": cfg["secret_key"],
+        }
         end = datetime.now()
         start = end - timedelta(days=30)
-        bars = api.get_bars(
-            symbol, tradeapi.TimeFrame.Day,
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            limit=30, feed="iex",
-        ).df
         result = []
-        for _, row in bars.iterrows():
-            result.append({
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(row["volume"]),
-            })
+
+        if "/" in symbol:
+            # Crypto — use v1beta3 endpoint
+            r = http_requests.get(
+                "https://data.alpaca.markets/v1beta3/crypto/us/bars",
+                params={
+                    "symbols": symbol,
+                    "timeframe": "1Day",
+                    "start": start.strftime("%Y-%m-%dT00:00:00Z"),
+                    "end": end.strftime("%Y-%m-%dT00:00:00Z"),
+                    "limit": 30,
+                },
+                headers=headers, timeout=10,
+            )
+            data = r.json()
+            for bar in data.get("bars", {}).get(symbol, []):
+                result.append({
+                    "open": bar["o"], "high": bar["h"],
+                    "low": bar["l"], "close": bar["c"],
+                    "volume": int(bar.get("v", 0) if isinstance(bar.get("v", 0), (int, float)) and bar.get("v", 0) > 1 else 0),
+                })
+        else:
+            # Stocks — use alpaca-trade-api
+            api = _get_api()
+            bars = api.get_bars(
+                symbol, tradeapi.TimeFrame.Day,
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                limit=30, feed="iex",
+            ).df
+            for _, row in bars.iterrows():
+                result.append({
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(row["volume"]),
+                })
+
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
