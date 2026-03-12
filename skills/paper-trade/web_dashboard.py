@@ -505,6 +505,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-size: 13px; line-height: 1.3;
     overflow: hidden; height: 100vh;
     display: flex; flex-direction: column;
+    padding: 6px;
   }
 
   /* ── Title Bar — matches: background #00d4aa, color #000, height 1 line ── */
@@ -835,7 +836,7 @@ async function refreshAccount() {
   $('ab-strat').innerHTML = `<span class="${sc}">${ss}${fmtC(d.strat_pnl)}</span>`;
 
   $('ab-deployed').textContent = `${fmtC(d.strat_deployed)}/${fmtC(d.strat_allocated)}`;
-  $('title-strat').textContent = `Strategies ${d.strat_active}/${d.strat_total}`;
+  $('title-strat').textContent = `Strategies ${d.strat_active} active / ${d.strat_total} total`;
 
   $('title-market').textContent = d.market_open ? 'OPEN' : 'CLOSED';
   marketOpen = d.market_open;
@@ -995,21 +996,9 @@ tick();
 setInterval(tick, 5000);
 setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 60000);
 
-// ── Drag-to-swap panels (any panel ↔ any panel, cross-row) ──
+// ── Drag-to-swap panels (same row only — prevents layout breakage) ──
 (function() {
   let dragSrc = null;
-
-  function swapPanels(a, b) {
-    const aParent = a.parentNode, bParent = b.parentNode;
-    const aSibling = a.nextSibling, bSibling = b.nextSibling;
-    // Create placeholders to handle cross-parent swaps
-    const placeholder = document.createComment('swap');
-    aParent.insertBefore(placeholder, a);
-    bParent.insertBefore(a, bSibling);
-    aParent.insertBefore(b, placeholder);
-    placeholder.remove();
-    saveLayout();
-  }
 
   document.querySelectorAll('.panel').forEach(panel => {
     panel.addEventListener('dragstart', e => {
@@ -1026,7 +1015,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('dragover', e => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      if (dragSrc && dragSrc !== panel) {
+      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
         panel.classList.add('drag-over');
       }
     });
@@ -1036,13 +1025,23 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('drop', e => {
       e.preventDefault();
       panel.classList.remove('drag-over');
-      if (dragSrc && dragSrc !== panel) {
-        swapPanels(dragSrc, panel);
+      if (!dragSrc || dragSrc === panel || dragSrc.parentNode !== panel.parentNode) return;
+      // Swap DOM positions within the same parent
+      const parent = panel.parentNode;
+      const allChildren = [...parent.children];
+      const idxA = allChildren.indexOf(dragSrc);
+      const idxB = allChildren.indexOf(panel);
+      if (idxA < idxB) {
+        parent.insertBefore(panel, dragSrc);
+        parent.insertBefore(dragSrc, allChildren[idxB + 1] || null);
+      } else {
+        parent.insertBefore(dragSrc, panel);
+        parent.insertBefore(panel, allChildren[idxA + 1] || null);
       }
+      saveLayout();
     });
   });
 
-  // ── Save / restore layout from localStorage ──
   function saveLayout() {
     const layout = {};
     document.querySelectorAll('.panel').forEach(p => {
@@ -1057,14 +1056,12 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     try {
       const layout = JSON.parse(localStorage.getItem('oc-layout'));
       if (!layout) return;
-      // Collect all panels by name
-      const panels = {};
-      document.querySelectorAll('.panel').forEach(p => { panels[p.dataset.panel] = p; });
       Object.entries(layout).forEach(([parentId, panelOrder]) => {
         const parent = document.getElementById(parentId);
         if (!parent) return;
         panelOrder.forEach(name => {
-          if (panels[name]) parent.appendChild(panels[name]);
+          const panel = document.querySelector(`.panel[data-panel="${name}"]`);
+          if (panel && panel.parentNode === parent) parent.appendChild(panel);
         });
       });
     } catch(e) {}
@@ -1072,7 +1069,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
   restoreLayout();
 })();
 
-// ── Resizable dividers (both row and column) ──
+// ── Resizable dividers (row and column) ──
 (function() {
   function saveSizes() {
     const state = {};
@@ -1082,30 +1079,37 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     localStorage.setItem('oc-sizes', JSON.stringify(state));
   }
 
-  function createDivider(elA, elB, direction) {
-    const isRow = direction === 'row'; // row = vertical divider (resize left/right)
+  function createDivider(direction) {
+    const isCol = direction === 'col'; // col-resize = vertical bar, drag left/right
     const div = document.createElement('div');
-    div.style.cssText = isRow
-      ? 'width:4px;cursor:col-resize;background:var(--border);flex-shrink:0;z-index:10;'
-      : 'height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;z-index:10;';
+    div.className = 'resize-divider';
+    div.style.cssText = isCol
+      ? 'width:4px;min-width:4px;cursor:col-resize;background:var(--border);flex-shrink:0;z-index:10;'
+      : 'height:4px;min-height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;z-index:10;';
     div.title = 'Drag to resize';
 
     div.addEventListener('mousedown', e => {
       e.preventDefault();
-      const startPos = isRow ? e.clientX : e.clientY;
-      const startA = isRow ? elA.getBoundingClientRect().width : elA.getBoundingClientRect().height;
-      const startB = isRow ? elB.getBoundingClientRect().width : elB.getBoundingClientRect().height;
-      elA.style.flex = 'none';
-      elB.style.flex = 'none';
-      if (isRow) { elA.style.width = startA + 'px'; elB.style.width = startB + 'px'; }
-      else { elA.style.height = startA + 'px'; elB.style.height = startB + 'px'; }
+      // Dynamically find neighbors at drag time (survives panel swaps)
+      const prev = div.previousElementSibling;
+      const next = div.nextElementSibling;
+      if (!prev || !next) return;
+
+      const startPos = isCol ? e.clientX : e.clientY;
+      const startPrev = isCol ? prev.getBoundingClientRect().width : prev.getBoundingClientRect().height;
+      const startNext = isCol ? next.getBoundingClientRect().width : next.getBoundingClientRect().height;
+
+      prev.style.flex = 'none';
+      next.style.flex = 'none';
+      if (isCol) { prev.style.width = startPrev + 'px'; next.style.width = startNext + 'px'; }
+      else { prev.style.height = startPrev + 'px'; next.style.height = startNext + 'px'; }
 
       function onMove(ev) {
-        const d = (isRow ? ev.clientX : ev.clientY) - startPos;
-        const newA = Math.max(60, startA + d);
-        const newB = Math.max(60, startB - d);
-        if (isRow) { elA.style.width = newA + 'px'; elB.style.width = newB + 'px'; }
-        else { elA.style.height = newA + 'px'; elB.style.height = newB + 'px'; }
+        const d = (isCol ? ev.clientX : ev.clientY) - startPos;
+        const newPrev = Math.max(60, startPrev + d);
+        const newNext = Math.max(60, startNext - d);
+        if (isCol) { prev.style.width = newPrev + 'px'; next.style.width = newNext + 'px'; }
+        else { prev.style.height = newPrev + 'px'; next.style.height = newNext + 'px'; }
       }
       function onUp() {
         document.removeEventListener('mousemove', onMove);
@@ -1118,7 +1122,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     return div;
   }
 
-  // Tag all resizable elements with IDs for persistence
+  // Tag resizable elements
   const rowEls = [
     document.getElementById('tables-row'),
     document.getElementById('strat-area'),
@@ -1126,25 +1130,20 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
   ];
   rowEls.forEach((el, i) => { el.dataset.resizeId = 'row-' + i; });
 
-  // Row dividers (horizontal — resize up/down)
+  // Row dividers (horizontal bar — drag up/down)
   for (let i = 0; i < rowEls.length - 1; i++) {
-    rowEls[i].after(createDivider(rowEls[i], rowEls[i + 1], 'column'));
+    rowEls[i].after(createDivider('row'));
     rowEls[i].style.borderBottom = 'none';
   }
 
-  // Column dividers (vertical — resize left/right) within each row
-  const colPairs = [
-    ['watchlist-pane', 'positions-pane'],
-    ['strat-left', 'strat-right'],
-  ];
-  colPairs.forEach(([leftId, rightId]) => {
-    const left = document.getElementById(leftId);
-    const right = document.getElementById(rightId);
-    if (!left || !right) return;
-    left.dataset.resizeId = leftId;
-    right.dataset.resizeId = rightId;
-    left.style.borderRight = 'none';
-    left.after(createDivider(left, right, 'row'));
+  // Column dividers (vertical bar — drag left/right)
+  [['watchlist-pane','positions-pane'], ['strat-left','strat-right']].forEach(([lId, rId]) => {
+    const l = document.getElementById(lId), r = document.getElementById(rId);
+    if (!l || !r) return;
+    l.dataset.resizeId = lId;
+    r.dataset.resizeId = rId;
+    l.style.borderRight = 'none';
+    l.after(createDivider('col'));
   });
 
   // Restore saved sizes
@@ -1154,7 +1153,6 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     Object.entries(state).forEach(([id, s]) => {
       const el = document.querySelector(`[data-resize-id="${id}"]`);
       if (!el) return;
-      if (s.flex) el.style.flex = s.flex;
       if (s.w) { el.style.flex = 'none'; el.style.width = s.w; }
       if (s.h) { el.style.flex = 'none'; el.style.height = s.h; }
     });
