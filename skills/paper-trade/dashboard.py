@@ -34,6 +34,7 @@ from strategy_manager import StrategyManager
 CONFIG_PATH = Path(__file__).parent / "config.json"
 WATCHLIST_PATH = Path(__file__).parent / "watchlist.json"
 TRADE_LOG_PATH = Path(__file__).parent / "trade_log.txt"
+RELOAD_FLAG = Path(__file__).parent / ".reload"
 
 DEFAULT_WATCHLIST = ["NVDA", "AAPL", "SPY", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "QQQ"]
 
@@ -540,6 +541,16 @@ class TradingTerminal(App):
         self.set_interval(1, self._auto_tick_check)
 
     def _auto_tick_check(self):
+        # Check for reload flag (touched by run.sh or Claude after edits)
+        if RELOAD_FLAG.exists():
+            try:
+                RELOAD_FLAG.unlink()
+            except Exception:
+                pass
+            self._shutting_down = True
+            self.workers.cancel_all()
+            self.exit(return_code=42)
+            return
         if not self.auto_tick or self._shutting_down or self._tick_running:
             return
         now = datetime.now()
@@ -1464,3 +1475,4 @@ class TradingTerminal(App):
 if __name__ == "__main__":
     app = TradingTerminal()
     app.run()
+    sys.exit(app.return_code or 0)
