@@ -110,7 +110,7 @@ def api_account():
         sm = _get_strategy_manager()
         if sm:
             try:
-                summary = sm.account_summary()
+                summary = sm.get_summary()
                 strat_pnl = summary.get("total_pnl", 0)
                 strat_deployed = summary.get("total_used", 0)
                 strat_allocated = summary.get("total_allocated", 0)
@@ -198,22 +198,36 @@ def api_watchlist():
 
         if cryptos:
             try:
+                # Get current prices
                 r = http_requests.get(
                     "https://data.alpaca.markets/v1beta3/crypto/us/latest/trades",
                     params={"symbols": ",".join(cryptos)},
                     headers=headers, timeout=10,
                 )
                 trades = r.json()
+                # Get today's open for change calculation
+                r2 = http_requests.get(
+                    "https://data.alpaca.markets/v1beta3/crypto/us/bars",
+                    params={"symbols": ",".join(cryptos), "timeframe": "1Day", "limit": 1},
+                    headers=headers, timeout=10,
+                )
+                bars_data = r2.json().get("bars", {})
                 for sym in cryptos:
-                    norm = sym.replace("/", "")
                     price = 0
                     if "trades" in trades and sym in trades["trades"]:
                         price = trades["trades"][sym].get("p", 0)
-                    elif "trades" in trades and norm in trades["trades"]:
-                        price = trades["trades"][norm].get("p", 0)
+                    elif "trades" in trades and sym.replace("/", "") in trades["trades"]:
+                        price = trades["trades"][sym.replace("/", "")].get("p", 0)
+                    # Change from today's open
+                    change = 0
+                    sym_bars = bars_data.get(sym, [])
+                    if sym_bars and price:
+                        day_open = sym_bars[-1].get("o", 0)
+                        if day_open:
+                            change = (price - day_open) / day_open * 100
                     result.append({
                         "symbol": sym, "price": price,
-                        "change_pct": 0, "type": "crypto",
+                        "change_pct": change, "type": "crypto",
                     })
             except Exception:
                 pass
@@ -274,7 +288,8 @@ def api_orders():
                         f"NEW {side_txt} {o['symbol']} x{o['qty']:.0f} {price_txt} {o['type']} [{o['strategy']}]",
                         "new"
                     )
-        _seen_order_ids = current_ids
+        # Merge open IDs into seen set (don't replace — keep historical fills)
+        _seen_order_ids.update(current_ids)
 
         # Also check recent filled orders for the log
         try:
@@ -285,8 +300,10 @@ def api_orders():
                     if o.filled_at:
                         side_txt = o.side.upper()
                         price = float(o.filled_avg_price) if o.filled_avg_price else 0
+                        qty = float(o.qty) if o.qty else 0
+                        qty_fmt = f"{qty:.6f}".rstrip("0").rstrip(".") if qty % 1 else f"{qty:.0f}"
                         _log_entry(
-                            f"FILL {side_txt} {o.symbol} x{float(o.qty):.0f} @ ${price:.2f}",
+                            f"FILL {side_txt} {o.symbol} x{qty_fmt} @ ${price:,.2f}",
                             "fill-buy" if o.side == "buy" else "fill-sell"
                         )
         except Exception:
@@ -309,10 +326,13 @@ def api_strategies():
             last_tick = ""
             if s.get("last_tick"):
                 try:
-                    dt = datetime.fromisoformat(str(s["last_tick"]))
-                    last_tick = dt.strftime("%H:%M:%S")
+                    raw = str(s["last_tick"]).replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(raw)
+                    # Convert UTC to local time
+                    local_dt = dt.astimezone()
+                    last_tick = local_dt.strftime("%H:%M:%S")
                 except Exception:
-                    last_tick = "---"
+                    last_tick = str(s["last_tick"])[:8]
 
             result.append({
                 "name": s.get("name", ""),
@@ -482,8 +502,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* ── Title Bar — matches: background #00d4aa, color #000, height 1 line ── */
   #title-bar {
-    height: 24px; display: flex; align-items: center;
-    padding: 0 8px; background: var(--green); color: #000000;
+    height: 28px; display: flex; align-items: center;
+    padding: 0 14px; background: var(--green); color: #000000;
     font-weight: 700; font-size: 13px;
     flex-shrink: 0; white-space: nowrap; overflow: hidden;
   }
@@ -491,8 +511,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* ── Account Bar — matches: background #0c0c0c, height 1 line ── */
   #account-bar {
-    height: 24px; display: flex; align-items: center;
-    padding: 0 8px; background: var(--dark-bg);
+    height: 28px; display: flex; align-items: center;
+    padding: 0 14px; background: var(--dark-bg);
     font-size: 13px; flex-shrink: 0;
     white-space: nowrap; overflow: hidden;
   }
@@ -541,7 +561,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* ── Pane title — matches: bg #111111, color #00d4aa, bold ── */
   .pane-title {
-    height: 22px; padding: 0 8px; font-size: 13px; font-weight: 700;
+    height: 26px; padding: 0 12px; font-size: 13px; font-weight: 700;
     color: var(--green); background: var(--header-bg);
     display: flex; align-items: center; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
@@ -561,19 +581,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .panel.dragging { opacity: 0.4; }
 
   /* ── Tables ── */
-  .tbl-wrap { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .tbl-wrap { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; }
   table { width: 100%; border-collapse: collapse; }
   /* Header — matches DataTable header: bg #111111, color #00d4aa, bold */
   th {
     position: sticky; top: 0; z-index: 1;
-    padding: 2px 8px; text-align: left;
+    padding: 4px 10px; text-align: left;
     font-size: 13px; font-weight: 700;
     color: var(--green); background: var(--header-bg);
     border-bottom: 1px solid var(--border);
   }
   th.r, td.r { text-align: right; }
   td {
-    padding: 2px 8px;
+    padding: 4px 10px;
     white-space: nowrap; font-size: 13px;
   }
   .sym { font-weight: 700; color: var(--white); }
@@ -587,7 +607,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* ── Trade Log ── */
   #log-body {
-    flex: 1; overflow-y: auto; padding: 0 8px; font-size: 13px;
+    flex: 1; overflow-y: auto; padding: 4px 12px; font-size: 13px;
   }
   .log-entry { line-height: 1.4; }
   .log-ts { color: var(--dim); margin-right: 8px; }
@@ -600,8 +620,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   /* ── Status Line — matches: bg #111111, color #576a7e, height 1 line ── */
   #status-line {
-    height: 22px; display: flex; align-items: center;
-    padding: 0 8px; background: var(--header-bg);
+    height: 26px; display: flex; align-items: center;
+    padding: 0 14px; background: var(--header-bg);
     color: var(--dim); font-size: 13px;
     flex-shrink: 0;
     white-space: nowrap; overflow: hidden;
@@ -720,17 +740,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Status Line: " q Quit  r Refresh  / Command  │  strat add <type> <name> <symbol>  │  strat pause/resume/remove <name>  │  buy/sell SYMBOL [QTY]  │  tick #N" -->
+<!-- Status Line -->
 <div id="status-line">
-  <span>q Quit&nbsp;&nbsp;r Refresh&nbsp;&nbsp;/ Command</span>
-  <span class="sep">│</span>
-  <span>strat add &lt;type&gt; &lt;name&gt; &lt;symbol&gt;</span>
-  <span class="sep">│</span>
-  <span>strat pause/resume/remove &lt;name&gt;</span>
-  <span class="sep">│</span>
-  <span>buy/sell SYMBOL [QTY]</span>
+  <span>Auto-refresh every 5s</span>
   <span class="sep">│</span>
   <span id="tick-count">tick #0</span>
+  <span class="sep">│</span>
+  <span id="status-time"></span>
 </div>
 
 <script>
@@ -954,6 +970,7 @@ async function tick() {
   tickNum++;
   await Promise.all([refreshAccount(), refreshPositions(), refreshWatchlist(), refreshOrders(), refreshStrategies(), refreshLog()]);
   $('tick-count').textContent = 'tick #' + tickNum;
+  $('status-time').textContent = new Date().toLocaleTimeString('en-US', {hour12: false});
 }
 
 tick();
