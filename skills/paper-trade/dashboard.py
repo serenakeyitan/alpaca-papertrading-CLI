@@ -523,7 +523,8 @@ class TradingTerminal(App):
         self.set_interval(5, self.refresh_positions)
         self.set_interval(5, self.poll_orders)
         self.set_interval(10, self.refresh_strategies)
-        self.set_interval(3, self.update_clock)
+        self.set_interval(1, self.update_clock)
+        self.set_interval(30, self._check_market_status)
         self.set_interval(30, self.refresh_chart)
         self.set_interval(1, self._auto_tick_check)
 
@@ -549,7 +550,7 @@ class TradingTerminal(App):
         self._tick_running = True
         self._run_auto_tick()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _run_auto_tick(self):
         try:
             self.sm.tick_all(self.api)
@@ -564,12 +565,7 @@ class TradingTerminal(App):
         if self._shutting_down: return
         now = datetime.now().strftime("%H:%M:%S")
         dot = "●" if self.tick_count % 2 == 0 else "○"
-        try:
-            clock = self.api.get_clock()
-            self._market_open = clock.is_open
-            mkt = "[green]OPEN[/]" if clock.is_open else "[red]CLOSED[/]"
-        except Exception:
-            mkt = "?"
+        mkt = "[green]OPEN[/]" if self._market_open else "[red]CLOSED[/]"
         active = sum(1 for s in self.sm.strategies.values() if s.status == "active")
         total = len(self.sm.strategies)
         auto = f"  │  [green]AUTO {self.auto_tick_interval}s[/]" if self.auto_tick else ""
@@ -584,14 +580,22 @@ class TradingTerminal(App):
         )
         self.tick_count += 1
 
+    @work(thread=True, exclusive=True)
+    def _check_market_status(self):
+        try:
+            clock = self.api.get_clock()
+            self._market_open = clock.is_open
+        except Exception:
+            pass
+
     # ── Data fetching ─────────────────────────────────────
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _load_history(self):
         """Load recent fills from API into the trading log on startup."""
         self._load_recent_orders()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_all(self):
         if self._shutting_down: return
         self._fetch_account()
@@ -600,29 +604,28 @@ class TradingTerminal(App):
         self._fetch_orders()
         self._fetch_strategies()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_prices(self):
         if self._shutting_down: return
         self._fetch_prices()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_account(self):
         if self._shutting_down: return
         self._fetch_account()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_positions(self):
         if self._shutting_down: return
         self._fetch_positions()
 
-    @work(thread=True)
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def poll_orders(self):
         if self._shutting_down: return
         self._poll_new_fills()
         self._fetch_orders()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_strategies(self):
         if self._shutting_down: return
         self._fetch_strategies()
@@ -791,7 +794,7 @@ class TradingTerminal(App):
 
     # ── Bars fetch (for sparklines) ─────────────────────────
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def refresh_chart(self):
         if self._shutting_down: return
         self._fetch_bars()
