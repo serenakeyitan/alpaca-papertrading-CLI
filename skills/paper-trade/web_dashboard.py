@@ -545,7 +545,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     color: var(--green); background: var(--header-bg);
     display: flex; align-items: center; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
+    cursor: grab; user-select: none;
   }
+  .pane-title:active { cursor: grabbing; }
+  .pane-title .drag-handle {
+    margin-right: 6px; opacity: 0.3; font-size: 11px; letter-spacing: -1px;
+  }
+  .pane-title:hover .drag-handle { opacity: 0.7; }
+
+  /* ── Drag & drop feedback ── */
+  .panel[draggable] { transition: opacity 0.15s; }
+  .panel.drag-over {
+    outline: 2px solid var(--green); outline-offset: -2px;
+  }
+  .panel.dragging { opacity: 0.4; }
 
   /* ── Tables ── */
   .tbl-wrap { flex: 1; overflow-y: auto; overflow-x: hidden; }
@@ -642,7 +655,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- Row 1: Watchlist | Positions -->
   <div id="tables-row">
 
-    <div id="watchlist-pane">
+    <div id="watchlist-pane" class="panel" draggable="true" data-panel="watchlist">
+      <div class="pane-title"><span class="drag-handle">⠿</span>&nbsp;WATCHLIST</div>
       <div class="tbl-wrap">
         <table>
           <thead><tr><th>&nbsp;#</th><th>MARKET</th><th class="r">Price</th><th class="r">Chg</th><th>Trend</th></tr></thead>
@@ -651,10 +665,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <div id="positions-pane">
+    <div id="positions-pane" class="panel" draggable="true" data-panel="positions">
+      <div class="pane-title"><span class="drag-handle">⠿</span>&nbsp;POSITIONS</div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>POSITIONS</th><th class="r">Qty</th><th class="r">Price</th><th class="r">P&amp;L</th><th class="r">P&amp;L%</th></tr></thead>
+          <thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Price</th><th class="r">P&amp;L</th><th class="r">P&amp;L%</th></tr></thead>
           <tbody id="positions-body"></tbody>
         </table>
       </div>
@@ -665,8 +680,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <!-- Row 2: Strategies | Open Orders -->
   <div id="strat-area">
 
-    <div id="strat-left">
-      <div class="pane-title">&nbsp;STRATEGIES</div>
+    <div id="strat-left" class="panel" draggable="true" data-panel="strategies">
+      <div class="pane-title"><span class="drag-handle">⠿</span>&nbsp;STRATEGIES</div>
       <div class="tbl-wrap">
         <table>
           <thead><tr>
@@ -680,8 +695,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
 
-    <div id="strat-right">
-      <div class="pane-title">&nbsp;OPEN ORDERS</div>
+    <div id="strat-right" class="panel" draggable="true" data-panel="orders">
+      <div class="pane-title"><span class="drag-handle">⠿</span>&nbsp;OPEN ORDERS</div>
       <div class="tbl-wrap">
         <table>
           <thead><tr>
@@ -697,8 +712,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 
   <!-- Row 3: Trading Log -->
-  <div id="log-area">
-    <div class="pane-title">&nbsp;TRADING LOG</div>
+  <div id="log-area" class="panel" draggable="true" data-panel="log">
+    <div class="pane-title"><span class="drag-handle">⠿</span>&nbsp;TRADING LOG</div>
     <div id="log-body">
       <div class="log-entry"><span class="log-ts">--/-- --:--:--</span><span class="log-info">Terminal started — loading recent orders...</span></div>
     </div>
@@ -807,7 +822,7 @@ async function refreshWatchlist() {
   if (data.error || !Array.isArray(data)) return;
 
   for (const item of data) {
-    if (!barCache[item.symbol] && item.type === 'stock') {
+    if (!barCache[item.symbol]) {
       fetchJSON('/api/bars/' + encodeURIComponent(item.symbol))
         .then(bars => { if (Array.isArray(bars)) barCache[item.symbol] = bars; })
         .catch(() => {});
@@ -944,6 +959,165 @@ async function tick() {
 tick();
 setInterval(tick, 5000);
 setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 60000);
+
+// ── Drag-to-swap panels ──
+(function() {
+  let dragSrc = null;
+
+  function swapPanels(a, b) {
+    // Swap all child nodes between two panels
+    const aParent = a.parentNode, bParent = b.parentNode;
+    const aNext = a.nextSibling, bNext = b.nextSibling;
+    // Swap DOM positions
+    if (aNext === b) {
+      aParent.insertBefore(b, a);
+    } else if (bNext === a) {
+      bParent.insertBefore(a, b);
+    } else {
+      aParent.insertBefore(b, aNext);
+      bParent.insertBefore(a, bNext);
+    }
+    // Swap flex styles if they differ
+    const aFlex = a.style.flex || getComputedStyle(a).flex;
+    const bFlex = b.style.flex || getComputedStyle(b).flex;
+    if (aFlex !== bFlex) {
+      const tmpFlex = a.style.flex;
+      a.style.flex = b.style.flex;
+      b.style.flex = tmpFlex;
+    }
+    saveLayout();
+  }
+
+  document.querySelectorAll('.panel').forEach(panel => {
+    panel.addEventListener('dragstart', e => {
+      // Only allow drag from the title bar
+      if (!e.target.closest('.pane-title') && e.target.classList.contains('panel')) {
+        // check if the actual click target was inside pane-title
+      }
+      dragSrc = panel;
+      panel.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', panel.dataset.panel);
+    });
+    panel.addEventListener('dragend', () => {
+      panel.classList.remove('dragging');
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('drag-over'));
+      dragSrc = null;
+    });
+    panel.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // Only highlight if same row (same parent) for safe swaps
+      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
+        panel.classList.add('drag-over');
+      }
+    });
+    panel.addEventListener('dragleave', () => {
+      panel.classList.remove('drag-over');
+    });
+    panel.addEventListener('drop', e => {
+      e.preventDefault();
+      panel.classList.remove('drag-over');
+      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
+        swapPanels(dragSrc, panel);
+      }
+    });
+  });
+
+  // ── Save / restore layout from localStorage ──
+  function saveLayout() {
+    const layout = {};
+    document.querySelectorAll('.panel').forEach(p => {
+      const parent = p.parentNode.id || 'main';
+      if (!layout[parent]) layout[parent] = [];
+      layout[parent].push(p.dataset.panel);
+    });
+    localStorage.setItem('oc-layout', JSON.stringify(layout));
+  }
+
+  function restoreLayout() {
+    try {
+      const layout = JSON.parse(localStorage.getItem('oc-layout'));
+      if (!layout) return;
+      Object.entries(layout).forEach(([parentId, panelOrder]) => {
+        const parent = document.getElementById(parentId);
+        if (!parent) return;
+        panelOrder.forEach(name => {
+          const panel = document.querySelector(`.panel[data-panel="${name}"]`);
+          if (panel && panel.parentNode === parent) {
+            parent.appendChild(panel); // re-append in saved order
+          }
+        });
+      });
+    } catch(e) {}
+  }
+  restoreLayout();
+})();
+
+// ── Resizable row dividers ──
+(function() {
+  const rows = [
+    { el: document.getElementById('tables-row'), min: 60 },
+    { el: document.getElementById('strat-area'), min: 50 },
+    { el: document.getElementById('log-area'), min: 50 },
+  ];
+  const mainEl = document.querySelector('.main');
+
+  function createDivider(topRow, bottomRow) {
+    const div = document.createElement('div');
+    div.style.cssText = 'height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;position:relative;z-index:10;';
+    div.title = 'Drag to resize';
+    let startY, startTopH, startBotH;
+
+    div.addEventListener('mousedown', e => {
+      e.preventDefault();
+      startY = e.clientY;
+      startTopH = topRow.el.getBoundingClientRect().height;
+      startBotH = bottomRow.el.getBoundingClientRect().height;
+      // Switch from flex to fixed height during resize
+      topRow.el.style.flex = 'none';
+      bottomRow.el.style.flex = 'none';
+      topRow.el.style.height = startTopH + 'px';
+      bottomRow.el.style.height = startBotH + 'px';
+
+      function onMove(e) {
+        const dy = e.clientY - startY;
+        const newTop = Math.max(topRow.min, startTopH + dy);
+        const newBot = Math.max(bottomRow.min, startBotH - dy);
+        topRow.el.style.height = newTop + 'px';
+        bottomRow.el.style.height = newBot + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        // Save sizes
+        const sizes = rows.map(r => r.el.style.height || '');
+        localStorage.setItem('oc-row-sizes', JSON.stringify(sizes));
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    return div;
+  }
+
+  // Insert dividers between rows
+  for (let i = 0; i < rows.length - 1; i++) {
+    const divider = createDivider(rows[i], rows[i + 1]);
+    rows[i].el.after(divider);
+    // Remove the CSS border since we now have a visible divider
+    rows[i].el.style.borderBottom = 'none';
+  }
+
+  // Restore saved row sizes
+  try {
+    const sizes = JSON.parse(localStorage.getItem('oc-row-sizes'));
+    if (sizes && sizes.length === rows.length) {
+      sizes.forEach((h, i) => {
+        if (h) { rows[i].el.style.flex = 'none'; rows[i].el.style.height = h; }
+      });
+    }
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>
