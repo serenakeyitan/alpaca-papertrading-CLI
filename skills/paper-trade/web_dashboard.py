@@ -960,40 +960,24 @@ tick();
 setInterval(tick, 5000);
 setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 60000);
 
-// ── Drag-to-swap panels ──
+// ── Drag-to-swap panels (any panel ↔ any panel, cross-row) ──
 (function() {
   let dragSrc = null;
 
   function swapPanels(a, b) {
-    // Swap all child nodes between two panels
     const aParent = a.parentNode, bParent = b.parentNode;
-    const aNext = a.nextSibling, bNext = b.nextSibling;
-    // Swap DOM positions
-    if (aNext === b) {
-      aParent.insertBefore(b, a);
-    } else if (bNext === a) {
-      bParent.insertBefore(a, b);
-    } else {
-      aParent.insertBefore(b, aNext);
-      bParent.insertBefore(a, bNext);
-    }
-    // Swap flex styles if they differ
-    const aFlex = a.style.flex || getComputedStyle(a).flex;
-    const bFlex = b.style.flex || getComputedStyle(b).flex;
-    if (aFlex !== bFlex) {
-      const tmpFlex = a.style.flex;
-      a.style.flex = b.style.flex;
-      b.style.flex = tmpFlex;
-    }
+    const aSibling = a.nextSibling, bSibling = b.nextSibling;
+    // Create placeholders to handle cross-parent swaps
+    const placeholder = document.createComment('swap');
+    aParent.insertBefore(placeholder, a);
+    bParent.insertBefore(a, bSibling);
+    aParent.insertBefore(b, placeholder);
+    placeholder.remove();
     saveLayout();
   }
 
   document.querySelectorAll('.panel').forEach(panel => {
     panel.addEventListener('dragstart', e => {
-      // Only allow drag from the title bar
-      if (!e.target.closest('.pane-title') && e.target.classList.contains('panel')) {
-        // check if the actual click target was inside pane-title
-      }
       dragSrc = panel;
       panel.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -1007,8 +991,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('dragover', e => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      // Only highlight if same row (same parent) for safe swaps
-      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
+      if (dragSrc && dragSrc !== panel) {
         panel.classList.add('drag-over');
       }
     });
@@ -1018,7 +1001,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('drop', e => {
       e.preventDefault();
       panel.classList.remove('drag-over');
-      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
+      if (dragSrc && dragSrc !== panel) {
         swapPanels(dragSrc, panel);
       }
     });
@@ -1039,14 +1022,14 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     try {
       const layout = JSON.parse(localStorage.getItem('oc-layout'));
       if (!layout) return;
+      // Collect all panels by name
+      const panels = {};
+      document.querySelectorAll('.panel').forEach(p => { panels[p.dataset.panel] = p; });
       Object.entries(layout).forEach(([parentId, panelOrder]) => {
         const parent = document.getElementById(parentId);
         if (!parent) return;
         panelOrder.forEach(name => {
-          const panel = document.querySelector(`.panel[data-panel="${name}"]`);
-          if (panel && panel.parentNode === parent) {
-            parent.appendChild(panel); // re-append in saved order
-          }
+          if (panels[name]) parent.appendChild(panels[name]);
         });
       });
     } catch(e) {}
@@ -1054,45 +1037,45 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
   restoreLayout();
 })();
 
-// ── Resizable row dividers ──
+// ── Resizable dividers (both row and column) ──
 (function() {
-  const rows = [
-    { el: document.getElementById('tables-row'), min: 60 },
-    { el: document.getElementById('strat-area'), min: 50 },
-    { el: document.getElementById('log-area'), min: 50 },
-  ];
-  const mainEl = document.querySelector('.main');
+  function saveSizes() {
+    const state = {};
+    document.querySelectorAll('[data-resize-id]').forEach(el => {
+      state[el.dataset.resizeId] = { w: el.style.width || '', h: el.style.height || '', flex: el.style.flex || '' };
+    });
+    localStorage.setItem('oc-sizes', JSON.stringify(state));
+  }
 
-  function createDivider(topRow, bottomRow) {
+  function createDivider(elA, elB, direction) {
+    const isRow = direction === 'row'; // row = vertical divider (resize left/right)
     const div = document.createElement('div');
-    div.style.cssText = 'height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;position:relative;z-index:10;';
+    div.style.cssText = isRow
+      ? 'width:4px;cursor:col-resize;background:var(--border);flex-shrink:0;z-index:10;'
+      : 'height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;z-index:10;';
     div.title = 'Drag to resize';
-    let startY, startTopH, startBotH;
 
     div.addEventListener('mousedown', e => {
       e.preventDefault();
-      startY = e.clientY;
-      startTopH = topRow.el.getBoundingClientRect().height;
-      startBotH = bottomRow.el.getBoundingClientRect().height;
-      // Switch from flex to fixed height during resize
-      topRow.el.style.flex = 'none';
-      bottomRow.el.style.flex = 'none';
-      topRow.el.style.height = startTopH + 'px';
-      bottomRow.el.style.height = startBotH + 'px';
+      const startPos = isRow ? e.clientX : e.clientY;
+      const startA = isRow ? elA.getBoundingClientRect().width : elA.getBoundingClientRect().height;
+      const startB = isRow ? elB.getBoundingClientRect().width : elB.getBoundingClientRect().height;
+      elA.style.flex = 'none';
+      elB.style.flex = 'none';
+      if (isRow) { elA.style.width = startA + 'px'; elB.style.width = startB + 'px'; }
+      else { elA.style.height = startA + 'px'; elB.style.height = startB + 'px'; }
 
-      function onMove(e) {
-        const dy = e.clientY - startY;
-        const newTop = Math.max(topRow.min, startTopH + dy);
-        const newBot = Math.max(bottomRow.min, startBotH - dy);
-        topRow.el.style.height = newTop + 'px';
-        bottomRow.el.style.height = newBot + 'px';
+      function onMove(ev) {
+        const d = (isRow ? ev.clientX : ev.clientY) - startPos;
+        const newA = Math.max(60, startA + d);
+        const newB = Math.max(60, startB - d);
+        if (isRow) { elA.style.width = newA + 'px'; elB.style.width = newB + 'px'; }
+        else { elA.style.height = newA + 'px'; elB.style.height = newB + 'px'; }
       }
       function onUp() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        // Save sizes
-        const sizes = rows.map(r => r.el.style.height || '');
-        localStorage.setItem('oc-row-sizes', JSON.stringify(sizes));
+        saveSizes();
       }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -1100,22 +1083,46 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     return div;
   }
 
-  // Insert dividers between rows
-  for (let i = 0; i < rows.length - 1; i++) {
-    const divider = createDivider(rows[i], rows[i + 1]);
-    rows[i].el.after(divider);
-    // Remove the CSS border since we now have a visible divider
-    rows[i].el.style.borderBottom = 'none';
+  // Tag all resizable elements with IDs for persistence
+  const rowEls = [
+    document.getElementById('tables-row'),
+    document.getElementById('strat-area'),
+    document.getElementById('log-area'),
+  ];
+  rowEls.forEach((el, i) => { el.dataset.resizeId = 'row-' + i; });
+
+  // Row dividers (horizontal — resize up/down)
+  for (let i = 0; i < rowEls.length - 1; i++) {
+    rowEls[i].after(createDivider(rowEls[i], rowEls[i + 1], 'column'));
+    rowEls[i].style.borderBottom = 'none';
   }
 
-  // Restore saved row sizes
+  // Column dividers (vertical — resize left/right) within each row
+  const colPairs = [
+    ['watchlist-pane', 'positions-pane'],
+    ['strat-left', 'strat-right'],
+  ];
+  colPairs.forEach(([leftId, rightId]) => {
+    const left = document.getElementById(leftId);
+    const right = document.getElementById(rightId);
+    if (!left || !right) return;
+    left.dataset.resizeId = leftId;
+    right.dataset.resizeId = rightId;
+    left.style.borderRight = 'none';
+    left.after(createDivider(left, right, 'row'));
+  });
+
+  // Restore saved sizes
   try {
-    const sizes = JSON.parse(localStorage.getItem('oc-row-sizes'));
-    if (sizes && sizes.length === rows.length) {
-      sizes.forEach((h, i) => {
-        if (h) { rows[i].el.style.flex = 'none'; rows[i].el.style.height = h; }
-      });
-    }
+    const state = JSON.parse(localStorage.getItem('oc-sizes'));
+    if (!state) return;
+    Object.entries(state).forEach(([id, s]) => {
+      const el = document.querySelector(`[data-resize-id="${id}"]`);
+      if (!el) return;
+      if (s.flex) el.style.flex = s.flex;
+      if (s.w) { el.style.flex = 'none'; el.style.width = s.w; }
+      if (s.h) { el.style.flex = 'none'; el.style.height = s.h; }
+    });
   } catch(e) {}
 })();
 </script>
