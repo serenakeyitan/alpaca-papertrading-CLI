@@ -591,19 +591,22 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* ── Tables ── */
   .tbl-wrap { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; }
   table { width: 100%; border-collapse: collapse; }
-  /* Header — matches DataTable header: bg #111111, color #00d4aa, bold */
+  /* Header — centered over column body */
   th {
     position: sticky; top: 0; z-index: 1;
-    padding: 4px 10px; text-align: left;
+    padding: 4px 10px; text-align: center;
     font-size: 13px; font-weight: 700;
     color: var(--green); background: var(--header-bg);
     border-bottom: 1px solid var(--border);
+    overflow: hidden; text-overflow: ellipsis;
   }
-  th.r, td.r { text-align: right; }
   td {
-    padding: 4px 10px;
+    padding: 4px 10px; text-align: center;
     white-space: nowrap; font-size: 13px;
+    overflow: hidden; text-overflow: ellipsis;
   }
+  /* Right-align numeric columns */
+  th.r, td.r { text-align: right; }
   .sym { font-weight: 700; color: var(--white); }
   .pos { color: var(--green); }
   .neg { color: var(--red); }
