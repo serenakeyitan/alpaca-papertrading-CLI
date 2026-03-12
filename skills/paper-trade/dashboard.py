@@ -1528,7 +1528,27 @@ class TradingTerminal(App):
         self.refresh_prices()
 
 
+def _reset_terminal():
+    """Force terminal back to sane state — runs on any exit."""
+    try:
+        fd = sys.stdout.fileno()
+        # Exit alternate screen, disable mouse tracking, show cursor, reset attrs
+        os.write(fd, b'\033[?1049l\033[?1000l\033[?1003l\033[?1006l\033[?1015l\033[?25h\033[0m\n')
+    except Exception:
+        pass
+    try:
+        import termios, tty
+        # Restore cooked mode if possible
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW,
+                          termios.tcgetattr(sys.stdin.fileno()))
+    except Exception:
+        pass
+
+import atexit
+atexit.register(_reset_terminal)
+
 if __name__ == "__main__":
     app = TradingTerminal()
     app.run()
+    _reset_terminal()
     sys.exit(app.return_code or 0)
