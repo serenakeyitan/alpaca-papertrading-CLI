@@ -334,6 +334,9 @@ def api_strategies():
                 except Exception:
                     last_tick = str(s["last_tick"])[:8]
 
+            # Determine if this is a crypto strategy
+            is_crypto = "/" in str(s.get("name", "")) or "eth" in str(s.get("name", "")).lower() or "btc" in str(s.get("name", "")).lower()
+
             result.append({
                 "name": s.get("name", ""),
                 "type": s.get("type", ""),
@@ -346,6 +349,7 @@ def api_strategies():
                 "fills": s.get("total_fills", 0),
                 "last_tick": last_tick or "---",
                 "error_msg": s.get("error_msg", ""),
+                "is_crypto": is_crypto,
             })
         return jsonify(result)
     except Exception as e:
@@ -357,7 +361,10 @@ def api_log():
     global _history_loaded
     if not _history_loaded:
         _history_loaded = True
-        _load_order_history()
+        try:
+            _load_order_history()
+        except Exception as e:
+            _log_entry(f"Error loading history: {e}", "dim")
     return jsonify(_trade_log[-100:])
 
 
@@ -771,6 +778,7 @@ function fmtC(n) {
 const barCache = {};
 let tickNum = 0;
 let breathOn = true;
+let marketOpen = false;
 
 function renderSpark(bars) {
   if (!bars || !bars.length) return '<span class="dim">&nbsp;&nbsp;···&nbsp;&nbsp;</span>';
@@ -830,6 +838,7 @@ async function refreshAccount() {
   $('title-strat').textContent = `Strategies ${d.strat_active}/${d.strat_total}`;
 
   $('title-market').textContent = d.market_open ? 'OPEN' : 'CLOSED';
+  marketOpen = d.market_open;
 }
 
 // ── Watchlist — columns: #, MARKET, Price, Chg, Trend ──
@@ -911,7 +920,12 @@ async function refreshStrategies() {
   };
 
   tbody.innerHTML = data.map(s => {
-    const [statusTxt, sCls] = statusMap[s.status] || ['?', 'dim'];
+    let [statusTxt, sCls] = statusMap[s.status] || ['?', 'dim'];
+    // Show IDLE for stock strategies when market is closed
+    if (!s.is_crypto && !marketOpen && s.status === 'active') {
+      statusTxt = '\u25CB MKT CLOSED';
+      sCls = 'dim';
+    }
     const err = s.status === 'error' && s.error_msg ? ` (${s.error_msg.slice(0,20)})` : '';
     return `<tr>
       <td class="sym">${s.name}</td>
@@ -956,8 +970,12 @@ async function refreshOrders() {
 // ── Trade Log ──
 async function refreshLog() {
   const data = await fetchJSON('/api/log');
-  if (data.error || !Array.isArray(data) || !data.length) return;
+  if (data.error || !Array.isArray(data)) return;
   const body = $('log-body');
+  if (!data.length) {
+    body.innerHTML = '<div class="log-entry"><span class="dim">Loading trade history...</span></div>';
+    return;
+  }
   body.innerHTML = data.map(e => {
     const c = {'fill-buy':'log-fill-buy','fill-sell':'log-fill-sell','new':'log-new','cancel':'log-cancel','strat':'log-strat','info':'log-info'}[e.style] || 'dim';
     return `<div class="log-entry"><span class="log-ts">${e.ts}</span><span class="${c}">${e.msg}</span></div>`;
