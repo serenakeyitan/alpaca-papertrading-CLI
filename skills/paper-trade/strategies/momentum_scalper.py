@@ -107,7 +107,8 @@ class MomentumScalperStrategy(Strategy):
         if not in_position:
             # BUY when momentum is strong and positive
             if momentum >= buy_thresh:
-                cid = self.tag_order_id(f"scalp_buy{trade_count}")
+                ts = int(datetime.now(timezone.utc).timestamp())
+                cid = self.tag_order_id(f"b{trade_count}_{ts}")
                 order = self._submit_order(
                     api,
                     symbol=symbol,
@@ -133,7 +134,8 @@ class MomentumScalperStrategy(Strategy):
                 # Sell entire position
                 pos_qty = self._get_position_qty(api, pos_symbol)
                 if pos_qty > 0:
-                    cid = self.tag_order_id(f"scalp_sell{trade_count}")
+                    ts = int(datetime.now(timezone.utc).timestamp())
+                    cid = self.tag_order_id(f"s{trade_count}_{ts}")
                     order = self._submit_order(
                         api,
                         symbol=symbol,

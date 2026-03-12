@@ -33,6 +33,7 @@ from strategy_manager import StrategyManager
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 WATCHLIST_PATH = Path(__file__).parent / "watchlist.json"
+TRADE_LOG_PATH = Path(__file__).parent / "trade_log.txt"
 
 DEFAULT_WATCHLIST = ["NVDA", "AAPL", "SPY", "GOOGL", "MSFT", "AMZN", "TSLA", "META", "QQQ"]
 
@@ -453,7 +454,7 @@ class TradingTerminal(App):
         self.mini_bars = {}   # symbol -> list of {open,close,high,low} for sparklines
         self._shutting_down = False
         self._market_open = False
-        self.auto_tick = False
+        self.auto_tick = True
         self.auto_tick_interval = 10  # seconds
         self._tick_running = False
         self._last_auto_tick = None
@@ -512,6 +513,19 @@ class TradingTerminal(App):
         ot = self.query_one("#order-table", DataTable)
         ot.cursor_type = "none"
         ot.add_columns("Time", "Side", "Symbol", "Qty", "Type", "Limit", "Status", "Strategy")
+
+        # Load previous trade log entries
+        if TRADE_LOG_PATH.exists():
+            try:
+                lines = TRADE_LOG_PATH.read_text().strip().split("\n")
+                # Show last 50 entries
+                for line in lines[-50:]:
+                    if line.strip():
+                        self.query_one("#trade-log", RichLog).write(f"[dim]{line.strip()}[/]")
+                if lines:
+                    self.query_one("#trade-log", RichLog).write("[dim]─── previous session ───[/]")
+            except Exception:
+                pass
 
         self._log(f"[dim]{datetime.now().strftime('%m/%d %H:%M:%S')}[/]  Terminal started")
         self.refresh_all()
@@ -596,6 +610,7 @@ class TradingTerminal(App):
         if self._shutting_down: return
         self._fetch_positions()
 
+    @work(thread=True)
     @work(thread=True)
     def poll_orders(self):
         if self._shutting_down: return
@@ -976,7 +991,7 @@ class TradingTerminal(App):
 
     def _fetch_orders(self):
         try:
-            orders = self.api.list_orders(status="open", limit=20)
+            orders = self.api.list_orders(status="open", limit=50)
             rows = []
             for o in orders:
                 # Detect strategy from client_order_id
@@ -1075,6 +1090,14 @@ class TradingTerminal(App):
 
     def _log(self, msg):
         self.query_one("#trade-log", RichLog).write(msg)
+        # Persist to file (strip markup for plain text log)
+        try:
+            import re as _re
+            plain = _re.sub(r'\[/?[^\]]*\]', '', str(msg))
+            with open(TRADE_LOG_PATH, "a") as f:
+                f.write(plain.strip() + "\n")
+        except Exception:
+            pass
 
     # ── Actions ───────────────────────────────────────────
 

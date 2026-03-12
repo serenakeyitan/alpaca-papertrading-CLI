@@ -19,10 +19,11 @@ class GridStrategy(Strategy):
 
     Config keys
     -----------
-    symbol : str          — ticker to trade (e.g. "NVDA")
+    symbol : str          — ticker to trade (e.g. "NVDA", "ETH/USD")
     grid_pct : float      — total grid width as % of center price (e.g. 6)
     num_grids : int        — number of grid levels (buy + sell combined)
-    qty_per_grid : int     — shares per grid order
+    qty_per_grid : float   — qty per grid order (fractional for crypto)
+    notional_per_grid : float — $ amount per grid order (alternative to qty)
     """
 
     # -- per-instance state beyond base class --------------------------------
@@ -36,12 +37,29 @@ class GridStrategy(Strategy):
         self.config.setdefault("grid_pct", 6)
         self.config.setdefault("num_grids", 10)
         self.config.setdefault("qty_per_grid", 2)
+        self.config.setdefault("notional_per_grid", None)
         # Runtime state stored inside config for serialization
         self.config.setdefault("center_price", None)
         self.config.setdefault("open_order_ids", [])
         self.config.setdefault("grid_levels", [])
+        self.config.setdefault("trades", [])
 
     # -- helpers -------------------------------------------------------------
+
+    def _is_crypto(self) -> bool:
+        sym = self.config["symbol"]
+        return "/" in sym or sym in ("BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD")
+
+    def _tif(self) -> str:
+        return "gtc" if self._is_crypto() else "day"
+
+    def _order_symbol(self) -> str:
+        """Return symbol suitable for Alpaca order submission."""
+        return self.config["symbol"]
+
+    def _pos_symbol(self) -> str:
+        """Return symbol for position lookup (no slash)."""
+        return self.config["symbol"].replace("/", "")
 
     def _compute_grid_levels(self, center: float):
         """Return list of dicts with price / side / grid_idx."""
@@ -66,6 +84,7 @@ class GridStrategy(Strategy):
         symbol = self.config["symbol"]
         qty_per_grid = self.config["qty_per_grid"]
         half_grids = self.config["num_grids"] // 2
+        notional = self.config.get("notional_per_grid")
 
         price = self._get_latest_price(api, symbol)
         if price is None:
@@ -76,22 +95,43 @@ class GridStrategy(Strategy):
         self.config["center_price"] = price
 
         # Buy base position so sell grids can be placed
-        target_qty = qty_per_grid * half_grids
-        current_qty = self._get_position_qty(api, symbol)
-        need = target_qty - current_qty
+        pos_sym = self._pos_symbol()
+        current_qty = self._get_position_qty(api, pos_sym)
 
-        if need > 0:
-            cid = self.tag_order_id("base")
-            self._submit_order(
-                api,
-                symbol=symbol,
-                qty=need,
-                side="buy",
-                type="market",
-                time_in_force="day",
-                client_order_id=cid,
-            )
+        if notional:
+            # For crypto: use notional amounts
+            target_notional = notional * half_grids
+            current_value = current_qty * price
+            need_notional = target_notional - current_value
+            if need_notional > 10:  # min $10
+                ts = int(datetime.now(timezone.utc).timestamp())
+                cid = self.tag_order_id(f"base_{ts}")
+                self._submit_order(
+                    api,
+                    symbol=self._order_symbol(),
+                    notional=round(need_notional, 2),
+                    side="buy",
+                    type="market",
+                    time_in_force=self._tif(),
+                    client_order_id=cid,
+                )
+        else:
+            target_qty = qty_per_grid * half_grids
+            need = target_qty - current_qty
+            if need > 0:
+                ts = int(datetime.now(timezone.utc).timestamp())
+                cid = self.tag_order_id(f"base_{ts}")
+                self._submit_order(
+                    api,
+                    symbol=self._order_symbol(),
+                    qty=need,
+                    side="buy",
+                    type="market",
+                    time_in_force=self._tif(),
+                    client_order_id=cid,
+                )
 
+        self.started_at = datetime.now(timezone.utc).isoformat()
         self.status = "active"
 
     def tick(self, api):
@@ -103,6 +143,7 @@ class GridStrategy(Strategy):
         grid_pct = self.config["grid_pct"]
         num_grids = self.config["num_grids"]
         qty = self.config["qty_per_grid"]
+        notional = self.config.get("notional_per_grid")
         center = self.config["center_price"]
 
         self.last_tick = datetime.now(timezone.utc).isoformat()
@@ -115,7 +156,6 @@ class GridStrategy(Strategy):
         if center is not None:
             drift_pct = abs(current_price - center) / center * 100
             if drift_pct > grid_pct * 0.8:
-                # Cancel all existing grid orders and re-center
                 self._cancel_all_grid_orders(api)
                 center = current_price
                 self.config["center_price"] = center
@@ -136,8 +176,18 @@ class GridStrategy(Strategy):
                 filled_order = api.get_order(oid)
                 if filled_order.status == "filled" and filled_order.filled_avg_price:
                     self.total_fills += 1
+                    fill_price = float(filled_order.filled_avg_price)
                     fill_qty = float(filled_order.filled_qty)
-                    self.realized_pnl += round(step * fill_qty, 2)
+                    pnl = round(step * fill_qty, 2)
+                    self.realized_pnl += pnl
+                    now = datetime.now(timezone.utc).isoformat()
+                    self.config["trades"].append({
+                        "time": now,
+                        "side": filled_order.side,
+                        "price": fill_price,
+                        "qty": fill_qty,
+                        "pnl": pnl,
+                    })
             except Exception:
                 pass
 
@@ -150,7 +200,8 @@ class GridStrategy(Strategy):
             if o.limit_price:
                 existing_prices.add(round(float(o.limit_price), 2))
 
-        pos_qty = self._get_position_qty(api, symbol)
+        pos_sym = self._pos_symbol()
+        pos_qty = self._get_position_qty(api, pos_sym)
 
         # Place missing grid orders
         new_order_ids = [o.id for o in current_open]
@@ -161,22 +212,34 @@ class GridStrategy(Strategy):
 
             if price in existing_prices:
                 continue
-            if side == "sell" and pos_qty < qty:
-                continue
             if side == "buy" and price >= current_price:
                 continue
             if side == "sell" and price <= current_price:
                 continue
 
-            cid = self.tag_order_id(f"g{grid_idx}")
+            # For sell orders, check we have enough position
+            needed_qty = (notional / price if price > 0 else 0) if notional else qty
+            if side == "sell" and pos_qty < needed_qty * 0.5:
+                continue
+
+            ts = int(datetime.now(timezone.utc).timestamp())
+            cid = self.tag_order_id(f"g{grid_idx}_{ts}")
+
+            # For limit orders, compute qty from notional (Alpaca doesn't support
+            # notional on limit orders)
+            if notional and price > 0:
+                order_qty = round(notional / price, 6)
+            else:
+                order_qty = qty
+
             order = self._submit_order(
                 api,
-                symbol=symbol,
-                qty=qty,
+                symbol=self._order_symbol(),
+                qty=order_qty,
                 side=side,
                 type="limit",
                 limit_price=price,
-                time_in_force="day",
+                time_in_force=self._tif(),
                 client_order_id=cid,
             )
             if order:
@@ -184,19 +247,29 @@ class GridStrategy(Strategy):
 
         self.config["open_order_ids"] = new_order_ids
 
-        # Update capital_used (rough estimate based on position value)
+        # Update capital_used and unrealized P&L
         self.capital_used = pos_qty * current_price
-        # Update unrealized P&L from position
         try:
-            pos = api.get_position(symbol)
+            pos = api.get_position(pos_sym)
             self.unrealized_pnl = float(pos.unrealized_pl)
         except Exception:
             self.unrealized_pnl = 0.0
 
     def stop(self, api):
-        """Cancel all grid orders and stop."""
+        """Cancel all grid orders, close position, and stop."""
         self._cancel_all_grid_orders(api)
         self.config["open_order_ids"] = []
+        # Close position
+        pos_sym = self._pos_symbol()
+        pos_qty = self._get_position_qty(api, pos_sym)
+        if pos_qty > 0:
+            try:
+                api.submit_order(
+                    symbol=self._order_symbol(), qty=pos_qty, side="sell",
+                    type="market", time_in_force=self._tif(),
+                )
+            except Exception:
+                pass
         super().stop(api)
 
     def _cancel_all_grid_orders(self, api):
@@ -220,7 +293,9 @@ class GridStrategy(Strategy):
             "grid_pct": self.config["grid_pct"],
             "num_grids": self.config["num_grids"],
             "qty_per_grid": self.config["qty_per_grid"],
+            "notional_per_grid": self.config.get("notional_per_grid"),
             "open_order_count": len(self.config.get("open_order_ids", [])),
+            "recent_trades": self.config.get("trades", [])[-5:],
         }
 
     def to_dict(self) -> dict:
@@ -240,6 +315,8 @@ class GridStrategy(Strategy):
         obj.total_fills = data.get("total_fills", 0)
         obj.orders = list(data.get("orders", []))
         obj.created_at = data.get("created_at", "")
+        obj.started_at = data.get("started_at", "")
+        obj.duration_minutes = data.get("duration_minutes", 0)
         obj.last_tick = data.get("last_tick", "")
         obj.error_msg = data.get("error_msg", "")
         obj.capital_used = data.get("capital_used", 0.0)
