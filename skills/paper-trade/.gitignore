@@ -21,10 +21,9 @@ env/
 # State/logs (generated at runtime)
 strategies_state.json
 grid_state.json
-grid_bot.log
-strategy_manager.log
-tick.log
+*.log
 price_cache.json
+trade_log.txt
 
 # IDE
 .vscode/
