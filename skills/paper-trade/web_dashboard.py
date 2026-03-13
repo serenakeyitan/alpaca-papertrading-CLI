@@ -516,7 +516,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     --text: #f0f6fc;
     --dim: #8b949e;
     --white: #f0f6fc;
-    --accent: #58a6ff;
+    --accent: #58c0fa;
     --green: #3fb950;
     --red: #f85149;
     --yellow: #d29922;

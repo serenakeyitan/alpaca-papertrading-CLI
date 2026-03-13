@@ -524,7 +524,7 @@ def test_color_scheme():
         html = c.get('/').data.decode()
 
         # Accent color is blue, not green
-        check('Accent color is blue (#58a6ff)', '--accent: #58a6ff' in html)
+        check('Accent color is blue (#58a6ff)', '--accent: #58c0fa' in html)
         # Green is reserved for positive numbers
         check('Green for positive (#3fb950)', '--green: #3fb950' in html)
         # Red for negative
