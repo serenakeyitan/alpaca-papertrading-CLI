@@ -119,6 +119,15 @@ def api_account():
             except Exception:
                 pass
 
+        # Read tunnel URL if available
+        tunnel_url = ""
+        tunnel_file = SKILL_DIR / ".tunnel_url"
+        if tunnel_file.exists():
+            try:
+                tunnel_url = tunnel_file.read_text().strip()
+            except Exception:
+                pass
+
         return jsonify({
             "equity": equity,
             "cash": float(acct.cash),
@@ -132,6 +141,7 @@ def api_account():
             "strat_allocated": strat_allocated,
             "strat_active": strat_active,
             "strat_total": strat_total,
+            "tunnel_url": tunnel_url,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -782,6 +792,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <span id="tick-count">tick #0</span>
   <span class="sep">│</span>
   <span id="status-time"></span>
+  <span id="tunnel-url" style="margin-left:auto;"></span>
 </div>
 
 <script>
@@ -867,6 +878,11 @@ async function refreshAccount() {
 
   $('title-market').textContent = d.market_open ? 'OPEN' : 'CLOSED';
   marketOpen = d.market_open;
+
+  // Show tunnel URL in status bar
+  if (d.tunnel_url) {
+    $('tunnel-url').innerHTML = `<a href="${d.tunnel_url}" target="_blank" style="color:var(--accent);text-decoration:none;">${d.tunnel_url}</a>`;
+  }
 }
 
 // ── Watchlist — columns: #, MARKET, Price, Chg, Trend ──
