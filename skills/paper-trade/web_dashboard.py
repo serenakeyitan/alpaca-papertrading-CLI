@@ -999,7 +999,7 @@ tick();
 setInterval(tick, 5000);
 setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 60000);
 
-// ── Drag-to-swap panels (same row only — prevents layout breakage) ──
+// ── Drag-to-swap panels (any panel ↔ any panel via innerHTML swap) ──
 (function() {
   let dragSrc = null;
 
@@ -1018,7 +1018,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('dragover', e => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      if (dragSrc && dragSrc !== panel && dragSrc.parentNode === panel.parentNode) {
+      if (dragSrc && dragSrc !== panel) {
         panel.classList.add('drag-over');
       }
     });
@@ -1028,19 +1028,15 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     panel.addEventListener('drop', e => {
       e.preventDefault();
       panel.classList.remove('drag-over');
-      if (!dragSrc || dragSrc === panel || dragSrc.parentNode !== panel.parentNode) return;
-      // Swap DOM positions within the same parent
-      const parent = panel.parentNode;
-      const allChildren = [...parent.children];
-      const idxA = allChildren.indexOf(dragSrc);
-      const idxB = allChildren.indexOf(panel);
-      if (idxA < idxB) {
-        parent.insertBefore(panel, dragSrc);
-        parent.insertBefore(dragSrc, allChildren[idxB + 1] || null);
-      } else {
-        parent.insertBefore(dragSrc, panel);
-        parent.insertBefore(panel, allChildren[idxA + 1] || null);
-      }
+      if (!dragSrc || dragSrc === panel) return;
+      // Swap innerHTML — containers stay in place, content moves
+      const tmpHTML = panel.innerHTML;
+      panel.innerHTML = dragSrc.innerHTML;
+      dragSrc.innerHTML = tmpHTML;
+      // Swap data-panel attribute
+      const tmpAttr = panel.dataset.panel;
+      panel.dataset.panel = dragSrc.dataset.panel;
+      dragSrc.dataset.panel = tmpAttr;
       saveLayout();
     });
   });
@@ -1048,9 +1044,7 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
   function saveLayout() {
     const layout = {};
     document.querySelectorAll('.panel').forEach(p => {
-      const parent = p.parentNode.id || 'main';
-      if (!layout[parent]) layout[parent] = [];
-      layout[parent].push(p.dataset.panel);
+      layout[p.id] = p.dataset.panel;
     });
     localStorage.setItem('oc-layout', JSON.stringify(layout));
   }
@@ -1059,13 +1053,17 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     try {
       const layout = JSON.parse(localStorage.getItem('oc-layout'));
       if (!layout) return;
-      Object.entries(layout).forEach(([parentId, panelOrder]) => {
-        const parent = document.getElementById(parentId);
-        if (!parent) return;
-        panelOrder.forEach(name => {
-          const panel = document.querySelector(`.panel[data-panel="${name}"]`);
-          if (panel && panel.parentNode === parent) parent.appendChild(panel);
-        });
+      // Collect current state: panelName -> innerHTML
+      const contentByName = {};
+      document.querySelectorAll('.panel').forEach(p => {
+        contentByName[p.dataset.panel] = p.innerHTML;
+      });
+      // Apply saved mapping: containerId -> panelName
+      Object.entries(layout).forEach(([containerId, panelName]) => {
+        const container = document.getElementById(containerId);
+        if (!container || !contentByName[panelName]) return;
+        container.innerHTML = contentByName[panelName];
+        container.dataset.panel = panelName;
       });
     } catch(e) {}
   }
