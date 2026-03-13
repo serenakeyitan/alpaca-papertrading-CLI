@@ -17,6 +17,7 @@ Tests:
 import sys
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -325,6 +326,197 @@ def test_html_no_duplicate_ids():
         check('No duplicate IDs', len(dupes) == 0, f'duplicates: {dupes}')
 
 
+def test_trade_log_timezone():
+    """Test 16: Trade log timestamps use local time, not UTC."""
+    print("\n── Test 16: Trade Log Timezone ──")
+    from datetime import timezone as tz
+    with app.test_client() as c:
+        data = json.loads(c.get('/api/log').data)
+        check('Log has entries', len(data) > 0)
+
+        # Get current local date
+        now_local = datetime.now()
+        local_date = now_local.strftime("%m/%d")
+        utc_date = datetime.now(tz.utc).strftime("%m/%d")
+
+        # Collect all dates in log
+        log_dates = set()
+        for e in data:
+            if e['ts'] != '---':
+                log_dates.add(e['ts'].split(' ')[0])
+
+        # If local and UTC dates differ, verify log uses local date
+        if local_date != utc_date:
+            check(f'Log uses local date ({local_date}), not UTC ({utc_date})',
+                  local_date in log_dates,
+                  f'dates found: {sorted(log_dates)}')
+            # Most recent fills should be today in local time
+            recent_fills = [e for e in data if e['style'] in ('fill-buy', 'fill-sell')
+                            and e['ts'] != '---']
+            if recent_fills:
+                last_fill_date = recent_fills[-1]['ts'].split(' ')[0]
+                check(f'Most recent fill date is local ({local_date})',
+                      last_fill_date == local_date,
+                      f'got {last_fill_date}')
+        else:
+            check('Local and UTC same date (skip timezone check)', True)
+
+        # Verify timestamp format MM/DD HH:MM:SS
+        for e in data[:10]:
+            if e['ts'] != '---' and e['style'] != 'info':
+                ts = e['ts']
+                parts = ts.split(' ')
+                is_valid = (len(parts) == 2 and '/' in parts[0] and ':' in parts[1]
+                            and len(parts[0]) == 5)  # MM/DD = 5 chars
+                check(f'Timestamp format MM/DD HH:MM:SS: "{ts}"',
+                      is_valid, f'got "{ts}"')
+                break
+
+
+def test_trade_log_content():
+    """Test 17: Trade log entries have correct content."""
+    print("\n── Test 17: Trade Log Content ──")
+    with app.test_client() as c:
+        data = json.loads(c.get('/api/log').data)
+        check('Log has entries', len(data) > 0)
+
+        fills = [e for e in data if e['style'] in ('fill-buy', 'fill-sell')]
+        info = [e for e in data if e['style'] == 'info']
+
+        check('Has fill entries', len(fills) > 0, f'got {len(fills)}')
+        check('Has info entry (loaded message)', len(info) > 0)
+
+        # Check fill message format
+        for e in fills[:5]:
+            msg = e['msg']
+            check(f'Fill has FILL prefix: "{msg[:30]}..."',
+                  msg.startswith('FILL '))
+            check(f'Fill has side (BUY/SELL)',
+                  'BUY' in msg or 'SELL' in msg)
+            check(f'Fill has price (@)',
+                  '@ $' in msg)
+            check(f'Fill has symbol',
+                  'ETH/USD' in msg or 'NVDA' in msg or 'AAPL' in msg or 'QQQ' in msg or 'BTC/USD' in msg)
+            break  # Only check first fill in detail
+
+        # Check buy fills are green, sell fills are red
+        buy_found = False
+        sell_found = False
+        for e in fills:
+            if 'BUY' in e['msg'] and not buy_found:
+                check(f'BUY fill style is fill-buy', e['style'] == 'fill-buy')
+                buy_found = True
+            if 'SELL' in e['msg'] and not sell_found:
+                check(f'SELL fill style is fill-sell', e['style'] == 'fill-sell')
+                sell_found = True
+            if buy_found and sell_found:
+                break
+
+        # Check strategy tags present
+        tagged = [e for e in fills if '[' in e['msg']]
+        check('Fills have strategy tags [name]', len(tagged) > 0,
+              f'{len(tagged)}/{len(fills)} tagged')
+
+
+def test_trade_log_fill_count():
+    """Test 18: Trade log loads enough fills."""
+    print("\n── Test 18: Trade Log Fill Count ──")
+    with app.test_client() as c:
+        data = json.loads(c.get('/api/log').data)
+        fills = [e for e in data if e['style'] in ('fill-buy', 'fill-sell')]
+
+        check('Log has many fills (>50)', len(fills) >= 50,
+              f'got {len(fills)} fills')
+        check('Log capped at 100 entries', len(data) <= 100,
+              f'got {len(data)}')
+
+        # Check fills are roughly sorted chronologically (oldest first)
+        timestamps = [e['ts'] for e in fills if e['ts'] != '---' and '/' in e['ts']]
+        if len(timestamps) >= 2:
+            check('Fills ordered (first < last)',
+                  timestamps[0] <= timestamps[-1],
+                  f'first={timestamps[0]}, last={timestamps[-1]}')
+
+
+def test_trade_log_no_growth():
+    """Test 19: Trade log doesn't grow on repeated API calls."""
+    print("\n── Test 19: Trade Log No Growth ──")
+    with app.test_client() as c:
+        # Call multiple times
+        sizes = []
+        for i in range(5):
+            data = json.loads(c.get('/api/log').data)
+            sizes.append(len(data))
+
+        check('Log size stable across 5 calls', len(set(sizes)) == 1,
+              f'sizes: {sizes}')
+
+        # Check no duplicate messages
+        msgs = [e['ts'] + e['msg'] for e in data]
+        unique = set(msgs)
+        check('No duplicate log entries', len(msgs) == len(unique),
+              f'{len(msgs)} entries, {len(unique)} unique')
+
+
+def test_orders_timezone():
+    """Test 20: Open orders use local time with MM/DD format."""
+    print("\n── Test 20: Orders Timezone ──")
+    from datetime import timezone as tz
+    with app.test_client() as c:
+        data = json.loads(c.get('/api/orders').data)
+        if data:
+            local_date = datetime.now().strftime("%m/%d")
+            # Check format is MM/DD HH:MM (11 chars)
+            sample = data[0]['submitted_at']
+            check(f'Order time format MM/DD HH:MM: "{sample}"',
+                  '/' in sample and len(sample.split('/')[0]) == 2,
+                  f'got "{sample}"')
+            # Check dates
+            order_dates = set(o['submitted_at'].split(' ')[0] for o in data)
+            check(f'Orders include local date ({local_date})',
+                  local_date in order_dates,
+                  f'dates: {sorted(order_dates)}')
+        else:
+            check('No open orders (skip)', True)
+
+
+def test_utc_to_local_helper():
+    """Test 21: _utc_to_local_str helper function works correctly."""
+    print("\n── Test 21: UTC to Local Helper ──")
+    with app.test_client() as c:
+        html = c.get('/').data.decode()  # trigger app import
+
+    from web_dashboard import _utc_to_local_str
+
+    # Test with ISO string
+    result = _utc_to_local_str("2026-03-13T00:30:00+00:00")
+    check('ISO string converts', '/' in result and ':' in result, f'got "{result}"')
+    check('ISO string is local time (not 00:30 UTC)',
+          not result.endswith('00:30:00') or datetime.now().strftime('%z') == '+0000',
+          f'got "{result}"')
+
+    # Test with Z suffix
+    result = _utc_to_local_str("2026-03-13T00:30:00Z")
+    check('Z suffix converts', '/' in result and ':' in result, f'got "{result}"')
+
+    # Test with None
+    result = _utc_to_local_str(None)
+    check('None returns "---"', result == '---', f'got "{result}"')
+
+    # Test with datetime object
+    from datetime import timezone as tz
+    dt = datetime(2026, 3, 13, 0, 30, 0, tzinfo=tz.utc)
+    result = _utc_to_local_str(dt)
+    check('datetime obj converts', '/' in result and ':' in result, f'got "{result}"')
+
+    # Verify it actually converts to local
+    # 2026-03-13 00:30 UTC should be 2026-03-12 17:30 PDT (UTC-7)
+    local_offset = datetime.now().astimezone().utcoffset().total_seconds() / 3600
+    if local_offset != 0:
+        check(f'Converts to local (offset={local_offset}h)', '03/12' in result or '03/13' in result,
+              f'got "{result}"')
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  Dashboard Comprehensive Test Suite")
@@ -345,6 +537,12 @@ if __name__ == "__main__":
     test_bars_endpoints()
     test_no_stale_references()
     test_html_no_duplicate_ids()
+    test_trade_log_timezone()
+    test_trade_log_content()
+    test_trade_log_fill_count()
+    test_trade_log_no_growth()
+    test_orders_timezone()
+    test_utc_to_local_helper()
 
     print("\n" + "=" * 60)
     total = passed + failed

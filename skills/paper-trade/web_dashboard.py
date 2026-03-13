@@ -257,12 +257,7 @@ def api_orders():
                         strategy = f"{parts[0]}-{parts[1]}" if len(parts) > 1 else parts[0]
                         break
 
-            submitted = str(o.submitted_at)
-            try:
-                dt = datetime.fromisoformat(submitted.replace("Z", "+00:00"))
-                time_str = dt.strftime("%m/%d %H:%M")
-            except Exception:
-                time_str = submitted[:16]
+            time_str = _utc_to_local_str(o.submitted_at)[:11]  # MM/DD HH:MM
 
             result.append({
                 "id": o.id,
@@ -302,10 +297,14 @@ def api_orders():
                         price = float(o.filled_avg_price) if o.filled_avg_price else 0
                         qty = float(o.qty) if o.qty else 0
                         qty_fmt = f"{qty:.6f}".rstrip("0").rstrip(".") if qty % 1 else f"{qty:.0f}"
-                        _log_entry(
-                            f"FILL {side_txt} {o.symbol} x{qty_fmt} @ ${price:,.2f}",
-                            "fill-buy" if o.side == "buy" else "fill-sell"
-                        )
+                        ts = _utc_to_local_str(o.filled_at)
+                        _trade_log.append({
+                            "ts": ts,
+                            "msg": f"FILL {side_txt} {o.symbol} x{qty_fmt} @ ${price:,.2f}",
+                            "style": "fill-buy" if o.side == "buy" else "fill-sell",
+                        })
+                        if len(_trade_log) > 200:
+                            _trade_log.pop(0)
         except Exception:
             pass
 
@@ -368,29 +367,53 @@ def api_log():
     return jsonify(_trade_log[-100:])
 
 
+def _utc_to_local_str(ts_obj):
+    """Convert a UTC timestamp (string, datetime, or pandas Timestamp) to local MM/DD HH:MM:SS."""
+    from datetime import timezone as tz
+    if ts_obj is None:
+        return "---"
+    try:
+        # Convert pandas Timestamp to stdlib datetime first
+        if hasattr(ts_obj, 'to_pydatetime'):
+            ts_obj = ts_obj.to_pydatetime()
+        if isinstance(ts_obj, str):
+            raw = ts_obj.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(raw)
+        elif hasattr(ts_obj, 'astimezone'):
+            dt = ts_obj
+        else:
+            return "---"
+        # Ensure UTC aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%m/%d %H:%M:%S")
+    except Exception:
+        return "---"
+
+
 def _load_order_history():
     """Load recent filled orders from Alpaca into the trade log on first request."""
     import re
     try:
         api = _get_api()
-        orders = api.list_orders(status="all", limit=200)
+        # Use status="closed" to get only filled/cancelled, more fills per request
+        orders = api.list_orders(status="closed", limit=500)
         fills = [o for o in orders if o.status == "filled"]
+        # Deduplicate by order ID
+        seen_ids = set()
+        unique_fills = []
+        for o in fills:
+            if o.id not in seen_ids:
+                seen_ids.add(o.id)
+                unique_fills.append(o)
+        fills = unique_fills
         # Sort oldest first
         fills.sort(key=lambda o: str(o.filled_at or o.submitted_at or ""))
 
         for o in fills:
             _seen_order_ids.add(o.id)
-            ts_obj = o.filled_at or o.submitted_at
-            if ts_obj:
-                try:
-                    if hasattr(ts_obj, 'strftime'):
-                        ts = ts_obj.strftime("%m/%d %H:%M:%S")
-                    else:
-                        ts = str(ts_obj)[:19]
-                except Exception:
-                    ts = str(ts_obj)[:19]
-            else:
-                ts = "---"
+            ts = _utc_to_local_str(o.filled_at or o.submitted_at)
 
             side_txt = o.side.upper()
             qty = float(o.qty) if o.qty else 0
