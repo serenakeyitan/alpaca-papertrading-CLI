@@ -508,18 +508,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <title>OpenClaw Terminal</title>
 <style>
   :root {
-    --bg: #000000;
-    --dark-bg: #0c0c0c;
-    --panel-bg: #000000;
-    --header-bg: #111111;
-    --border: #1a2332;
-    --text: #c8d6e5;
-    --dim: #576a7e;
-    --white: #ffffff;
-    --green: #00d4aa;
-    --red: #ff6b6b;
-    --yellow: #f0c040;
-    --cyan: cyan;
+    --bg: #010409;
+    --dark-bg: #0d1117;
+    --panel-bg: #010409;
+    --header-bg: #0d1117;
+    --border: #30363d;
+    --text: #f0f6fc;
+    --dim: #8b949e;
+    --white: #f0f6fc;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --cyan: #79c0ff;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -531,16 +532,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     padding: 6px;
   }
 
-  /* ── Title Bar — matches: background #00d4aa, color #000, height 1 line ── */
+  /* ── Title Bar ── */
   #title-bar {
     height: 28px; display: flex; align-items: center;
-    padding: 0 14px; background: var(--green); color: #000000;
+    padding: 0 14px; background: var(--accent); color: #010409;
     font-weight: 700; font-size: 13px;
     flex-shrink: 0; white-space: nowrap; overflow: hidden;
   }
   #title-bar .sep { margin: 0 6px; opacity: 0.4; }
 
-  /* ── Account Bar — matches: background #0c0c0c, height 1 line ── */
+  /* ── Account Bar ── */
   #account-bar {
     height: 28px; display: flex; align-items: center;
     padding: 0 14px; background: var(--dark-bg);
@@ -590,10 +591,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     min-height: 80px; overflow: hidden;
   }
 
-  /* ── Pane title — matches: bg #111111, color #00d4aa, bold ── */
+  /* ── Pane title ── */
   .pane-title {
     height: 26px; padding: 0 12px; font-size: 13px; font-weight: 700;
-    color: var(--green); background: var(--header-bg);
+    color: var(--accent); background: var(--header-bg);
     display: flex; align-items: center; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
     cursor: grab; user-select: none;
@@ -607,7 +608,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* ── Drag & drop feedback ── */
   .panel[draggable] { transition: opacity 0.15s; }
   .panel.drag-over {
-    outline: 2px solid var(--green); outline-offset: -2px;
+    outline: 1px solid var(--accent); outline-offset: -1px;
   }
   .panel.dragging { opacity: 0.4; }
 
@@ -619,7 +620,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     position: sticky; top: 0; z-index: 1;
     padding: 4px 10px; text-align: center;
     font-size: 13px; font-weight: 700;
-    color: var(--green); background: var(--header-bg);
+    color: var(--accent); background: var(--header-bg);
     border-bottom: 1px solid var(--border);
     overflow: hidden; text-overflow: ellipsis;
   }
@@ -649,10 +650,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .log-fill-sell { color: var(--red); font-weight: 700; }
   .log-new { color: var(--yellow); }
   .log-cancel { color: var(--dim); }
-  .log-strat { color: var(--green); }
+  .log-strat { color: var(--accent); }
   .log-info { color: var(--cyan); }
 
-  /* ── Status Line — matches: bg #111111, color #576a7e, height 1 line ── */
+  /* ── Status Line ── */
   #status-line {
     height: 26px; display: flex; align-items: center;
     padding: 0 14px; background: var(--header-bg);
@@ -665,7 +666,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* ── Empty state ── */
   .empty { padding: 8px; color: var(--dim); font-size: 13px; }
 
-  /* ── Scrollbar — matches: scrollbar-color #1a2332 on #000 ── */
+  /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: var(--border); }
@@ -702,7 +703,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <span class="lbl">DAY</span><span class="val" id="ab-day">—</span>
   <span class="lbl">STRAT</span><span class="val" id="ab-strat">—</span>
   <span class="lbl">DEPLOYED</span><span class="val" id="ab-deployed">—</span>
-  <span id="ab-status" style="color:var(--green);margin-left:auto;font-weight:700"></span>
+  <span id="ab-status" style="color:var(--accent);margin-left:auto;font-weight:700"></span>
 </div>
 
 <div class="main">
@@ -1108,8 +1109,8 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
     const div = document.createElement('div');
     div.className = 'resize-divider';
     div.style.cssText = isCol
-      ? 'width:4px;min-width:4px;cursor:col-resize;background:var(--border);flex-shrink:0;z-index:10;'
-      : 'height:4px;min-height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;z-index:10;';
+      ? 'width:1px;min-width:1px;cursor:col-resize;background:var(--border);flex-shrink:0;z-index:10;'
+      : 'height:1px;min-height:1px;cursor:row-resize;background:var(--border);flex-shrink:0;z-index:10;';
     div.title = 'Drag to resize';
 
     div.addEventListener('mousedown', e => {

@@ -517,6 +517,62 @@ def test_utc_to_local_helper():
               f'got "{result}"')
 
 
+def test_color_scheme():
+    """Test 22: GitHub Dark High Contrast color scheme."""
+    print("\n── Test 22: Color Scheme ──")
+    with app.test_client() as c:
+        html = c.get('/').data.decode()
+
+        # Accent color is blue, not green
+        check('Accent color is blue (#58a6ff)', '--accent: #58a6ff' in html)
+        # Green is reserved for positive numbers
+        check('Green for positive (#3fb950)', '--green: #3fb950' in html)
+        # Red for negative
+        check('Red for negative (#f85149)', '--red: #f85149' in html)
+        # Background is GitHub dark HC
+        check('Background is #010409', '--bg: #010409' in html)
+        # Header bg
+        check('Header bg is #0d1117', '--header-bg: #0d1117' in html)
+        # Border color
+        check('Border is #30363d', '--border: #30363d' in html)
+        # Text is high contrast
+        check('Text is #f0f6fc', '--text: #f0f6fc' in html)
+        # Dim text
+        check('Dim is #8b949e', '--dim: #8b949e' in html)
+
+        # Title bar uses accent, not green
+        check('Title bar uses accent', "background: var(--accent)" in html)
+        # Pane titles use accent
+        check('Pane titles use accent',
+              re.search(r'\.pane-title\s*\{[^}]*color:\s*var\(--accent\)', html) is not None)
+        # Table headers use accent
+        check('Table headers use accent',
+              re.search(r'th\s*\{[^}]*color:\s*var\(--accent\)', html) is not None)
+
+        # Green only used for data (pos class, fills, sparklines)
+        check('.pos uses green', '.pos { color: var(--green)' in html)
+        check('.neg uses red', '.neg { color: var(--red)' in html)
+        check('Buy fills use green', '.log-fill-buy { color: var(--green)' in html)
+        check('Sell fills use red', '.log-fill-sell { color: var(--red)' in html)
+
+        # Borders are thin (1px), not thick
+        check('Resize dividers are 1px',
+              'width:1px;min-width:1px;cursor:col-resize' in html)
+        check('Row dividers are 1px',
+              'height:1px;min-height:1px;cursor:row-resize' in html)
+
+        # Drag outline uses accent, thin
+        check('Drag outline uses accent',
+              '1px solid var(--accent)' in html)
+
+        # Log strat tags use accent (not green)
+        check('Log strat uses accent', '.log-strat { color: var(--accent)' in html)
+
+        # Status indicator uses accent
+        check('Status indicator uses accent',
+              'color:var(--accent);margin-left:auto' in html)
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("  Dashboard Comprehensive Test Suite")
@@ -543,6 +599,7 @@ if __name__ == "__main__":
     test_trade_log_no_growth()
     test_orders_timezone()
     test_utc_to_local_helper()
+    test_color_scheme()
 
     print("\n" + "=" * 60)
     total = passed + failed
