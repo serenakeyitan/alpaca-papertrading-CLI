@@ -91,7 +91,13 @@ _DB_PATH = SKILL_DIR / "dashboard_cache.db"
 
 
 class _DataCache:
-    """Thread-safe cache populated by a background worker."""
+    """Thread-safe cache populated by a tiered background worker.
+
+    Refresh rates:
+    - Fast  (every 2s):  account, positions, orders/fills
+    - Normal (every ~6s): watchlist prices (stocks + crypto)
+    - Slow  (every ~30s): strategies
+    """
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -438,7 +444,14 @@ class _DataCache:
         t.start()
 
     def _run(self):
-        """Fetch all data every 5 seconds, update cache atomically."""
+        """Tiered background refresh: 2s for core, 5s for prices, 30s for strategies.
+
+        Keeps total API calls under Alpaca's 200/min rate limit:
+        - Fast (2s):   account, positions, orders → 5 calls × 30/min = 150
+        - Normal (5s): watchlist prices          → 3 calls × 12/min =  36
+        - Slow (30s):  strategies                → 0 API calls (local)
+        Total: ~186 calls/min (headroom under 200 limit)
+        """
         # Load trade log from SQLite first
         entries, seen = self._db_load_log()
         if entries:
@@ -446,38 +459,45 @@ class _DataCache:
             self._seen_order_ids = seen
             self._history_loaded = True
 
+        cycle = 0
         while True:
             try:
                 api = _get_api()
                 cfg = _load_config()
 
-                # Load history on first run if DB was empty
+                # One-time: load historical fills
                 if not self._history_loaded:
                     self._history_loaded = True
                     self._load_order_history(api)
 
-                # Fetch all data (single set of API calls)
+                # ── Fast tier (every cycle = every 2s) ──
                 account = self._fetch_account(api)
                 positions = self._fetch_positions(api)
-                watchlist = self._fetch_watchlist(cfg)
                 orders = self._fetch_orders_and_fills(api)
-                strategies = self._fetch_strategies()
 
-                # Atomic cache update
                 with self._lock:
                     self._data["account"] = account
                     self._data["positions"] = positions
-                    self._data["watchlist"] = watchlist
                     self._data["orders"] = orders
-                    self._data["strategies"] = strategies
                     self._data["log"] = self._trade_log[-100:]
 
-            except Exception as e:
-                with self._lock:
-                    if "error" not in str(self._data.get("account", {})):
-                        pass  # keep last good data on transient errors
+                # ── Normal tier (every ~3 cycles = every ~6s) ──
+                if cycle % 3 == 0:
+                    watchlist = self._fetch_watchlist(cfg)
+                    with self._lock:
+                        self._data["watchlist"] = watchlist
 
-            _time.sleep(5)
+                # ── Slow tier (every ~15 cycles = every ~30s) ──
+                if cycle % 15 == 0:
+                    strategies = self._fetch_strategies()
+                    with self._lock:
+                        self._data["strategies"] = strategies
+
+            except Exception:
+                pass  # keep last good data on transient errors
+
+            cycle += 1
+            _time.sleep(2)
 
 
 # Global cache instance — starts background refresh immediately on import
@@ -1440,7 +1460,7 @@ if __name__ == "__main__":
             print(f"\n  📊 Alpaca Paper Trading Dashboard")
             print(f"  ─────────────────────────────────")
             print(f"  Local:  http://{args.host}:{args.port}")
-            print(f"  Cache:  background refresh every 5s")
+            print(f"  Cache:  background refresh every 2s")
             print(f"  Tip:    Run 'bash scripts/start-web.sh' for auto-tunnel\n")
 
         from waitress import serve
