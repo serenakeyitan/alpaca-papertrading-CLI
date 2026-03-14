@@ -11,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 PORT=8888
 TUNNEL=true
+TUNNEL_CONFIG="$HOME/.alpaca-cli/tunnel.json"
+TUNNEL_URL_FILE="$SCRIPT_DIR/.tunnel_url"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -60,19 +62,25 @@ echo "  ✅ Local:   http://127.0.0.1:$PORT"
 
 # Start tunnel
 if $TUNNEL; then
-  if command -v cloudflared &>/dev/null; then
-    echo "  ⏳ Starting Cloudflare tunnel..."
-    TUNNEL_LOG=$(mktemp)
-    cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate 2>"$TUNNEL_LOG" &
+  # Check for permanent ngrok link first
+  if [[ -f "$TUNNEL_CONFIG" ]]; then
+    PROVIDER=$(python3 -c "import json; print(json.load(open('$TUNNEL_CONFIG')).get('provider',''))" 2>/dev/null)
+    DOMAIN=$(python3 -c "import json; print(json.load(open('$TUNNEL_CONFIG')).get('domain',''))" 2>/dev/null)
+  fi
+
+  if [[ "${PROVIDER:-}" == "ngrok" ]] && [[ -n "${DOMAIN:-}" ]] && command -v ngrok &>/dev/null; then
+    echo "  ⏳ Starting ngrok tunnel (permanent link)..."
+    ngrok http "$PORT" --url="$DOMAIN" --log=stdout --log-format=json >/tmp/ngrok-dashboard.log 2>&1 &
     TUNNEL_PID=$!
 
-    # Wait for the URL to appear in logs (up to 15s)
+    # Wait for tunnel to be ready (up to 15s)
     for i in $(seq 1 30); do
-      TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
-      if [[ -n "$TUNNEL_URL" ]]; then
-        echo "  🌐 Public:  $TUNNEL_URL"
+      if curl -s "http://127.0.0.1:4040/api/tunnels" 2>/dev/null | grep -q "$DOMAIN"; then
+        TUNNEL_URL="https://$DOMAIN"
+        echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+        echo "  🌐 Public:  $TUNNEL_URL  (permanent)"
         echo ""
-        echo "  Share this URL in Discord, Telegram, or any IM."
+        echo "  This link never changes. Share it anywhere."
         echo "  Dashboard auto-refreshes every 5 seconds."
         break
       fi
@@ -80,15 +88,51 @@ if $TUNNEL; then
     done
 
     if [[ -z "${TUNNEL_URL:-}" ]]; then
-      echo "  ⚠️  Tunnel started but couldn't detect URL."
-      echo "     Check: cat $TUNNEL_LOG"
+      if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+        echo "  ⚠️  ngrok failed to start. Check: cat /tmp/ngrok-dashboard.log"
+        echo "     Falling back to Cloudflare quick tunnel..."
+        PROVIDER=""  # fall through to cloudflared
+      else
+        echo "  ⚠️  ngrok started but couldn't confirm URL."
+        echo "     Your link should still work: https://$DOMAIN"
+        echo "$DOMAIN" > "$TUNNEL_URL_FILE"
+      fi
     fi
-    rm -f "$TUNNEL_LOG"
-  else
-    echo ""
-    echo "  ℹ️  cloudflared not found — skipping tunnel."
-    echo "     Install: brew install cloudflared"
-    echo "     Then re-run this script for a public URL."
+  fi
+
+  # Fallback: cloudflared quick tunnel (temporary URL)
+  if [[ "${PROVIDER:-}" != "ngrok" ]] || [[ -z "${DOMAIN:-}" ]]; then
+    if command -v cloudflared &>/dev/null; then
+      echo "  ⏳ Starting Cloudflare tunnel (temporary link)..."
+      TUNNEL_LOG=$(mktemp)
+      cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate 2>"$TUNNEL_LOG" &
+      TUNNEL_PID=$!
+
+      for i in $(seq 1 30); do
+        TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
+        if [[ -n "$TUNNEL_URL" ]]; then
+          echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+          echo "  🌐 Public:  $TUNNEL_URL"
+          echo ""
+          echo "  ⚠️  This URL changes each restart."
+          echo "  For a permanent link: bash scripts/setup-link.sh"
+          echo "  Dashboard auto-refreshes every 5 seconds."
+          break
+        fi
+        sleep 0.5
+      done
+
+      if [[ -z "${TUNNEL_URL:-}" ]]; then
+        echo "  ⚠️  Tunnel started but couldn't detect URL."
+        echo "     Check: cat $TUNNEL_LOG"
+      fi
+      rm -f "$TUNNEL_LOG"
+    else
+      echo ""
+      echo "  ℹ️  No tunnel provider found."
+      echo "     For a permanent link: bash scripts/setup-link.sh"
+      echo "     For a temporary link:  brew install cloudflared"
+    fi
   fi
 else
   echo ""

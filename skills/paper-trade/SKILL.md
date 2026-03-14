@@ -48,7 +48,8 @@ The user will speak in natural language. Map their intent to actions:
 | "run DCA $200 into SPY" | `alpaca strategy run dca -p symbol=SPY -p amount=200` |
 | "rebalance 50% AAPL 50% MSFT" | `alpaca strategy run rebalance -p 'targets={"AAPL":0.5,"MSFT":0.5}'` |
 | "open the dashboard" | `bash scripts/start-web.sh` |
-| "share dashboard link" | `bash scripts/start-web.sh` (outputs Cloudflare tunnel URL) |
+| "share dashboard link" | `bash scripts/start-web.sh` (outputs public URL) |
+| "get a permanent link" | `bash scripts/setup-link.sh` (free ngrok static domain) |
 | "start auto-trading" | Set up cron with `scripts/auto-tick.py` |
 
 ## Setup
@@ -92,7 +93,8 @@ A Bloomberg-style live dashboard accessible from any browser. Shows account over
 
 ### Launch
 ```bash
-bash scripts/start-web.sh              # default port 8888, with Cloudflare tunnel
+bash scripts/setup-link.sh              # one-time: set up permanent public link (free)
+bash scripts/start-web.sh              # default port 8888, with tunnel
 bash scripts/start-web.sh --port 9000  # custom port
 bash scripts/start-web.sh --no-tunnel  # localhost only
 ```
@@ -102,7 +104,8 @@ bash scripts/start-web.sh --no-tunnel  # localhost only
 - **Panel swap**: drag any panel onto another to swap positions (works across rows)
 - **Panel resize**: drag dividers to resize horizontally and vertically
 - **Layout persistence**: panel positions and sizes saved to localStorage
-- **Cloudflare tunnel**: auto-generates a public URL for sharing (requires `cloudflared`)
+- **Permanent public link**: run `bash scripts/setup-link.sh` to claim a free static domain via ngrok (never changes)
+- **Cloudflare tunnel fallback**: auto-generates a temporary public URL if no permanent link is set up
 - **Crypto + stock data**: separate API endpoints for crypto (v1beta3) vs stock (v2) data
 - **Local timezone**: all timestamps converted from UTC to user's local time
 - **Market status**: shows "MKT CLOSED" for stock strategies when market is closed
@@ -220,7 +223,8 @@ alpaca
 | Script | Purpose |
 |--------|---------|
 | `scripts/install.sh` | One-command installation (symlink + pip install) |
-| `scripts/start-web.sh` | Launch web dashboard with optional Cloudflare tunnel |
+| `scripts/setup-link.sh` | One-time setup for permanent public link (free ngrok static domain) |
+| `scripts/start-web.sh` | Launch web dashboard with tunnel (ngrok permanent or Cloudflare temporary) |
 | `scripts/auto-tick.py` | Cron-compatible script to tick all active strategies |
 | `run.sh` | Terminal dashboard launcher with auto-restart |
 

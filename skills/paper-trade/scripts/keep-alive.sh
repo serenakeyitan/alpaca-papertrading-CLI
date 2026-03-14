@@ -13,11 +13,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 PORT=8888
 TUNNEL_URL_FILE="$SCRIPT_DIR/.tunnel_url"
+TUNNEL_CONFIG="$HOME/.alpaca-cli/tunnel.json"
 LABEL_DASH="com.openclaw.dashboard"
 LABEL_TUNNEL="com.openclaw.tunnel"
 PLIST_DASH="$HOME/Library/LaunchAgents/${LABEL_DASH}.plist"
 PLIST_TUNNEL="$HOME/Library/LaunchAgents/${LABEL_TUNNEL}.plist"
 CLOUDFLARED="$(command -v cloudflared 2>/dev/null || echo /opt/homebrew/bin/cloudflared)"
+NGROK="$(command -v ngrok 2>/dev/null || echo /opt/homebrew/bin/ngrok)"
+
+# Detect tunnel provider
+TUNNEL_PROVIDER="cloudflared"
+NGROK_DOMAIN=""
+if [[ -f "$TUNNEL_CONFIG" ]]; then
+  TUNNEL_PROVIDER=$(python3 -c "import json; print(json.load(open('$TUNNEL_CONFIG')).get('provider','cloudflared'))" 2>/dev/null || echo "cloudflared")
+  NGROK_DOMAIN=$(python3 -c "import json; print(json.load(open('$TUNNEL_CONFIG')).get('domain',''))" 2>/dev/null || echo "")
+fi
 
 # ── Commands ──────────────────────────────────────────────
 
@@ -41,8 +51,14 @@ if [[ "${1:-}" == "status" ]]; then
   # Tunnel
   if launchctl list "$LABEL_TUNNEL" &>/dev/null; then
     if [[ -f "$TUNNEL_URL_FILE" ]]; then
-      echo "  Tunnel:    RUNNING"
-      echo "  Public:    $(cat "$TUNNEL_URL_FILE")"
+      echo "  Tunnel:    RUNNING ($TUNNEL_PROVIDER)"
+      URL="$(cat "$TUNNEL_URL_FILE")"
+      echo "  Public:    $URL"
+      if [[ "$TUNNEL_PROVIDER" == "ngrok" ]]; then
+        echo "  Type:      permanent (never changes)"
+      else
+        echo "  Type:      temporary (changes on restart)"
+      fi
     else
       echo "  Tunnel:    STARTING (URL not yet captured)"
     fi
@@ -60,8 +76,15 @@ if [[ ! -f "$VENV_PYTHON" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$CLOUDFLARED" ]]; then
+if [[ "$TUNNEL_PROVIDER" == "ngrok" ]]; then
+  if [[ ! -f "$NGROK" ]] && ! command -v ngrok &>/dev/null; then
+    echo "❌ ngrok not found. Install: brew install ngrok"
+    echo "   Or run: bash scripts/setup-link.sh"
+    exit 1
+  fi
+elif [[ ! -f "$CLOUDFLARED" ]] && ! command -v cloudflared &>/dev/null; then
   echo "❌ cloudflared not found. Install: brew install cloudflared"
+  echo "   For a permanent link instead: bash scripts/setup-link.sh"
   exit 1
 fi
 
@@ -75,6 +98,7 @@ launchctl unload "$PLIST_TUNNEL" 2>/dev/null
 # Kill any existing processes on the port
 lsof -ti :$PORT | xargs kill 2>/dev/null
 pkill -f "cloudflared tunnel" 2>/dev/null
+pkill -f "ngrok http" 2>/dev/null
 sleep 1
 
 # ── Create tunnel wrapper script ─────────────────────────
@@ -82,7 +106,24 @@ sleep 1
 # and also updates the dashboard so it can display the link.
 
 TUNNEL_WRAPPER="$SCRIPT_DIR/scripts/.tunnel-wrapper.sh"
-cat > "$TUNNEL_WRAPPER" << 'WRAPPER'
+
+if [[ "$TUNNEL_PROVIDER" == "ngrok" ]] && [[ -n "$NGROK_DOMAIN" ]]; then
+  # ngrok permanent tunnel wrapper
+  cat > "$TUNNEL_WRAPPER" << WRAPPER
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "\$0")/.." && pwd)"
+PORT=8888
+URL_FILE="\$SCRIPT_DIR/.tunnel_url"
+DOMAIN="$NGROK_DOMAIN"
+
+echo "https://\$DOMAIN" > "\$URL_FILE"
+
+# Start ngrok with permanent static domain
+ngrok http "\$PORT" --url="\$DOMAIN" --log=stdout --log-format=json > /tmp/ngrok-dashboard.log 2>&1
+WRAPPER
+else
+  # cloudflared temporary tunnel wrapper
+  cat > "$TUNNEL_WRAPPER" << 'WRAPPER'
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PORT=8888
@@ -91,11 +132,9 @@ LOG_FILE="/tmp/cloudflared-tunnel.log"
 
 rm -f "$URL_FILE"
 
-# Start cloudflared, tee stderr to log
 cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate 2>"$LOG_FILE" &
 CF_PID=$!
 
-# Wait for URL to appear (up to 30s)
 for i in $(seq 1 60); do
   URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG_FILE" 2>/dev/null | head -1 || true)
   if [[ -n "$URL" ]]; then
@@ -105,9 +144,9 @@ for i in $(seq 1 60); do
   sleep 0.5
 done
 
-# Wait for cloudflared to exit (launchd will restart it)
 wait $CF_PID
 WRAPPER
+fi
 chmod +x "$TUNNEL_WRAPPER"
 
 # ── Dashboard plist ───────────────────────────────────────
@@ -181,22 +220,33 @@ echo ""
 echo "  ✅ Dashboard and tunnel installed as launchd agents"
 echo "  ────────────────────────────────────────────────────"
 echo "  Dashboard: http://127.0.0.1:$PORT"
-echo "  Tunnel URL will appear in a few seconds..."
+echo "  Provider:  $TUNNEL_PROVIDER"
+
+if [[ "$TUNNEL_PROVIDER" == "ngrok" ]] && [[ -n "$NGROK_DOMAIN" ]]; then
+  echo "  🌐 Public: https://$NGROK_DOMAIN  (permanent)"
+  echo ""
+  echo "  This link never changes. Share it anywhere."
+else
+  echo "  Tunnel URL will appear in a few seconds..."
+fi
 echo ""
 echo "  Check status:  bash scripts/keep-alive.sh status"
 echo "  Stop:          bash scripts/keep-alive.sh stop"
 echo ""
 
-# Wait for tunnel URL
-for i in $(seq 1 20); do
-  if [[ -f "$TUNNEL_URL_FILE" ]]; then
-    echo "  🌐 Public: $(cat "$TUNNEL_URL_FILE")"
-    echo ""
-    break
-  fi
-  sleep 1
-done
+if [[ "$TUNNEL_PROVIDER" != "ngrok" ]]; then
+  # Wait for cloudflared URL
+  for i in $(seq 1 20); do
+    if [[ -f "$TUNNEL_URL_FILE" ]]; then
+      echo "  🌐 Public: $(cat "$TUNNEL_URL_FILE")"
+      echo "  ⚠️  This URL changes on restart. For a permanent link: bash scripts/setup-link.sh"
+      echo ""
+      break
+    fi
+    sleep 1
+  done
 
-if [[ ! -f "$TUNNEL_URL_FILE" ]]; then
-  echo "  ⏳ Tunnel still starting. Run: bash scripts/keep-alive.sh status"
+  if [[ ! -f "$TUNNEL_URL_FILE" ]]; then
+    echo "  ⏳ Tunnel still starting. Run: bash scripts/keep-alive.sh status"
+  fi
 fi
