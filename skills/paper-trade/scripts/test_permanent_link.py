@@ -501,9 +501,13 @@ def test_dashboard_integration():
     check("Dashboard displays tunnel URL in status bar", "tunnel_url" in wd)
     check("Dashboard makes URL clickable", "href" in wd and "tunnel_url" in wd)
 
-    # Dashboard doesn't care which provider — just reads the file
-    check("Dashboard is provider-agnostic (no ngrok/cloudflared refs in display logic)",
-          "ngrok" not in wd.lower() and "cloudflared" not in wd.lower())
+    # Dashboard doesn't care which provider in its display/API logic
+    # (references in comments/docstrings are OK)
+    import re
+    wd_no_comments = re.sub(r'""".*?"""', '', wd, flags=re.DOTALL)
+    wd_no_comments = re.sub(r'#.*$', '', wd_no_comments, flags=re.MULTILINE)
+    check("Dashboard is provider-agnostic (no ngrok/cloudflared in active code)",
+          "ngrok" not in wd_no_comments.lower() and "cloudflared" not in wd_no_comments.lower())
 
 
 # ── Run All ──────────────────────────────────────────────

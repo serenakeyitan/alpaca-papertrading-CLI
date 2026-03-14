@@ -1,0 +1,19 @@
+# Render Blueprint — one-click deploy for the Alpaca trading dashboard.
+# https://render.com/docs/blueprint-spec
+#
+# Deploy: click "New +" → "Blueprint" → connect this repo → set env vars.
+
+services:
+  - type: web
+    name: alpaca-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python web_dashboard.py --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false  # user must set this manually
+      - key: ALPACA_SECRET_KEY
+        sync: false  # user must set this manually
+      - key: PYTHON_VERSION
+        value: 3.11.0

@@ -12,6 +12,7 @@ Or via the helper script:
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -47,10 +48,16 @@ _history_loaded = False
 
 
 def _load_config():
+    # Environment variables first (for cloud deployment: Render, Railway, etc.)
+    api_key = os.environ.get("ALPACA_API_KEY") or os.environ.get("APCA_API_KEY_ID")
+    secret_key = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("APCA_API_SECRET_KEY")
+    if api_key and secret_key:
+        return {"api_key": api_key, "secret_key": secret_key}
+    # Fall back to config files (local development)
     for p in (CONFIG_PATH, HOME_CONFIG):
         if p.exists():
             return json.loads(p.read_text())
-    raise FileNotFoundError("No Alpaca config found. Run: alpaca configure init")
+    raise FileNotFoundError("No Alpaca config found. Set ALPACA_API_KEY + ALPACA_SECRET_KEY env vars, or run: alpaca configure init")
 
 
 def _get_api():
@@ -1204,19 +1211,149 @@ setInterval(() => { Object.keys(barCache).forEach(k => delete barCache[k]); }, 6
 </html>
 """
 
+# ── Auto-reload ────────────────────────────────────────────
+
+def _run_with_reload(host, port):
+    """Run the dashboard with auto-reload on file changes.
+
+    Uses a subprocess approach: the parent process watches for file changes
+    and restarts the child server process when .py files are modified.
+    The tunnel (ngrok/cloudflared) runs independently on the same port,
+    so code changes go live without breaking the public URL.
+    """
+    import os
+    import socket
+    import subprocess
+    import time
+
+    watch_dir = SKILL_DIR
+    watch_extensions = {".py", ".json"}
+
+    def _snapshot():
+        snap = {}
+        for ext in watch_extensions:
+            for f in watch_dir.rglob(f"*{ext}"):
+                parts = f.parts
+                if ".venv" in parts or "__pycache__" in parts or "node_modules" in parts:
+                    continue
+                try:
+                    snap[str(f)] = f.stat().st_mtime
+                except OSError:
+                    pass
+        return snap
+
+    def _wait_for_port_free(h, p, timeout=10):
+        """Wait until the port is available for binding."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind((h, p))
+                    return True
+                except OSError:
+                    time.sleep(0.3)
+        return False
+
+    def _start_child():
+        env = os.environ.copy()
+        env["_DASHBOARD_CHILD"] = "1"
+        cmd = [sys.executable, __file__, "--port", str(port), "--host", host]
+        return subprocess.Popen(cmd, env=env)
+
+    print(f"\n  📊 Alpaca Paper Trading Dashboard (auto-reload)")
+    print(f"  ─────────────────────────────────────────────────")
+    print(f"  Local:  http://{host}:{port}")
+    print(f"  Reload: watching {watch_dir} for changes")
+    print(f"  Tip:    Edit any .py file — dashboard reloads automatically")
+    print(f"          The tunnel stays alive, no URL change.\n")
+
+    # Kill any existing dashboard on this port (but NOT tunnel processes)
+    try:
+        import subprocess as _sp
+        pids = _sp.check_output(
+            ["lsof", "-ti", f":{port}"], text=True, stderr=_sp.DEVNULL
+        ).strip().split()
+        my_pid = str(os.getpid())
+        for pid in pids:
+            if pid and pid != my_pid:
+                os.kill(int(pid), 9)
+        if pids:
+            time.sleep(1)
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        pass
+    _wait_for_port_free(host, port)
+
+    prev = _snapshot()
+    proc = _start_child()
+    crash_count = 0
+
+    try:
+        while True:
+            time.sleep(1.5)
+            # Check child is alive
+            if proc.poll() is not None:
+                crash_count += 1
+                backoff = min(2 ** crash_count, 30)
+                print(f"  ⚠️  Dashboard process exited, restarting in {backoff}s...")
+                time.sleep(backoff)
+                _wait_for_port_free(host, port)
+                proc = _start_child()
+                prev = _snapshot()
+                continue
+            else:
+                crash_count = 0  # reset on successful run
+
+            # Check for file changes
+            curr = _snapshot()
+            changed = []
+            for path, mtime in curr.items():
+                if path not in prev or prev[path] != mtime:
+                    changed.append(Path(path).name)
+            if changed:
+                names = ", ".join(changed[:3])
+                if len(changed) > 3:
+                    names += f" +{len(changed)-3} more"
+                print(f"  🔄 Detected change in {names} — reloading...")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                _wait_for_port_free(host, port)
+                proc = _start_child()
+                prev = _snapshot()
+            else:
+                prev = curr
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
+
+
 # ── Main ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Alpaca Paper Trading Web Dashboard")
-    parser.add_argument("--port", type=int, default=8888, help="Port to listen on (default: 8888)")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int,
+                        default=int(os.environ.get("PORT", 8888)),
+                        help="Port to listen on (default: 8888, or $PORT env var)")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--reload", action="store_true",
+                        help="Auto-reload on file changes (tunnel stays alive)")
     args = parser.parse_args()
 
-    print(f"\n  📊 Alpaca Paper Trading Dashboard")
-    print(f"  ─────────────────────────────────")
-    print(f"  Local:  http://{args.host}:{args.port}")
-    print(f"  Tip:    Run 'bash scripts/start-web.sh' for auto-tunnel\n")
+    # If --reload and not the child process, run the watcher
+    if args.reload and not os.environ.get("_DASHBOARD_CHILD"):
+        _run_with_reload(args.host, args.port)
+    else:
+        if not os.environ.get("_DASHBOARD_CHILD"):
+            print(f"\n  📊 Alpaca Paper Trading Dashboard")
+            print(f"  ─────────────────────────────────")
+            print(f"  Local:  http://{args.host}:{args.port}")
+            print(f"  Tip:    Run 'bash scripts/start-web.sh' for auto-tunnel\n")
 
-    from waitress import serve
-    serve(app, host=args.host, port=args.port)
+        from waitress import serve
+        serve(app, host=args.host, port=args.port)

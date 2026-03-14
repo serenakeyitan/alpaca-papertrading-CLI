@@ -164,6 +164,7 @@ cat > "$PLIST_DASH" << EOF
     <string>${SCRIPT_DIR}/web_dashboard.py</string>
     <string>--port</string>
     <string>${PORT}</string>
+    <string>--reload</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${SCRIPT_DIR}</string>

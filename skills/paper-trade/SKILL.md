@@ -106,9 +106,9 @@ cat skills/paper-trade/.tunnel_url 2>/dev/null || echo ""
 ```
 
 ### Step 3: Start what's missing
-- If dashboard is NOT running: start it in the background
+- If dashboard is NOT running: start it with auto-reload in the background
   ```bash
-  cd skills/paper-trade && .venv/bin/python web_dashboard.py --port 8888 &>/tmp/openclaw-dashboard.log &
+  cd skills/paper-trade && .venv/bin/python web_dashboard.py --port 8888 --reload &>/tmp/openclaw-dashboard.log &
   ```
 - If tunnel is NOT running AND a permanent ngrok config exists (`~/.alpaca-cli/tunnel.json`):
   ```bash
@@ -125,26 +125,50 @@ cat skills/paper-trade/.tunnel_url 2>/dev/null || echo ""
 ### Step 4: Show the link to the user
 Always show the user their dashboard link at the start of the session:
 ```
-📊 Dashboard live at: https://<their-domain>.ngrok-free.app
+📊 Dashboard live at: https://<their-url>
    (auto-refreshes every 5s — all trades and price changes appear in real time)
 ```
+The URL may be a Render deployment (`*.onrender.com`), ngrok permanent link, or Cloudflare temporary link.
 
 ### Key behaviors:
 - **Never kill the tunnel** — the dashboard and tunnel run independently of the agent. When the user asks to buy, sell, or run strategies, just execute the CLI commands. The dashboard auto-refreshes from Alpaca APIs every 5 seconds, so all changes appear automatically.
-- **No restart needed** — executing trades, adding strategies, or changing positions does NOT require restarting the dashboard or tunnel. The dashboard polls live data.
-- **If no permanent link is set up**, tell the user they can get one with `bash scripts/setup-link.sh` (free, 2 minutes).
+- **No restart needed for trades** — executing trades, adding strategies, or changing positions does NOT require restarting the dashboard or tunnel. The dashboard polls live data.
+- **Code changes auto-reload** — the dashboard runs with `--reload` by default. When the user edits `web_dashboard.py` (new API endpoints, restructured UI, changed data sources), the dashboard process automatically detects the file change and restarts within ~2 seconds. The ngrok/cloudflared tunnel stays alive because it binds to the port, not the process. The public URL never changes.
+- **What auto-reloads**: any `.py` or `.json` file change in the skill directory triggers a reload. This covers: new API routes, changed HTML/CSS/JS (embedded in web_dashboard.py), modified strategy logic, updated watchlist, etc.
+- **What does NOT need reload**: trade executions, position changes, price updates — these come from Alpaca's live APIs and are fetched fresh every 5 seconds.
+- **If no permanent link is set up**, recommend deploying to Render (free, always online, auto-deploys on git push). Alternatively, `bash scripts/setup-link.sh` for a local ngrok link.
+
+### When the user asks to modify the dashboard:
+1. Edit the code (web_dashboard.py, strategies, etc.)
+2. Save the file — the reload happens automatically in ~2 seconds
+3. Tell the user to refresh the browser (or wait for the next 5-second auto-refresh cycle)
+4. The ngrok/tunnel link stays exactly the same — no need to touch it
 
 ## Web Dashboard
 
 A Bloomberg-style live dashboard accessible from any browser. Shows account overview, strategies, watchlist, open orders, and trade log — all auto-refreshing every 5 seconds.
 
-### Launch
+### Launch (Local)
 ```bash
 bash scripts/setup-link.sh              # one-time: set up permanent public link (free)
 bash scripts/start-web.sh              # default port 8888, with tunnel
 bash scripts/start-web.sh --port 9000  # custom port
 bash scripts/start-web.sh --no-tunnel  # localhost only
 ```
+
+### Deploy to Cloud (Render — free, recommended)
+For a permanent URL that's always online without running anything locally:
+
+1. Fork or push this repo to GitHub
+2. Go to [render.com](https://render.com) → sign in with GitHub
+3. Click **New +** → **Blueprint** → select this repo
+4. Set environment variables when prompted:
+   - `ALPACA_API_KEY` — your Alpaca paper trading API key
+   - `ALPACA_SECRET_KEY` — your Alpaca paper trading secret key
+5. Click **Apply** — Render deploys automatically
+6. Your dashboard is live at `https://alpaca-dashboard-xxxx.onrender.com` (permanent)
+
+Every `git push` auto-deploys the latest code. No tunnels, no local processes needed.
 
 ### Features
 - **5 draggable, resizable panels**: Account, Strategies, Watchlist, Open Orders, Trade Log

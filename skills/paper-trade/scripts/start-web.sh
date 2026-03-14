@@ -48,7 +48,7 @@ trap cleanup EXIT INT TERM
 echo ""
 echo "  📊 Alpaca Paper Trading — Web Dashboard"
 echo "  ────────────────────────────────────────"
-"$VENV_PYTHON" "$SCRIPT_DIR/web_dashboard.py" --port "$PORT" &
+"$VENV_PYTHON" "$SCRIPT_DIR/web_dashboard.py" --port "$PORT" --reload &
 DASH_PID=$!
 sleep 1.5
 
