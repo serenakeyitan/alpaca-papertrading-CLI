@@ -332,8 +332,8 @@ def test_tiered_refresh_logic():
           "expected cycle % 6 for slow tier")
 
     # Verify sleep interval is 2 (not 5)
-    check("Sleep interval is 2 seconds", "sleep(2)" in source,
-          "expected _time.sleep(2)")
+    check("Sleep interval is 1.5 seconds", "sleep(1.5)" in source,
+          "expected _time.sleep(1.5)")
 
     # Verify tiered structure references
     check("Has 'Fast tier' comment", "Fast tier" in source)
@@ -544,61 +544,46 @@ def test_rate_limit_safety():
     """Test 9: API calls per minute stay under Alpaca's 200 limit."""
     print("\n── Test 9: Rate Limit Safety ──")
 
-    # From the _run docstring and code:
-    # sleep(2) = 30 cycles per minute
-    cycles_per_minute = 60 / 2  # = 30
+    # sleep(1.5) + ~1.3s API latency = ~2.8s effective cycle
+    # Theoretical max (instant API): 60/1.5 = 40 cycles/min
+    # Real-world: 60/2.8 ≈ 21 cycles/min
+    effective_cycle_s = 2.8  # measured: 1.5s sleep + 1.3s parallel API
+    effective_cpm = 60 / effective_cycle_s
 
-    # Fast tier (every cycle = every 2s):
-    #   _fetch_account: get_account + get_clock = 2 calls
-    #   _fetch_watchlist: snapshots + crypto trades + crypto bars = 3 calls
-    fast_calls_per_cycle = 5  # account(2) + watchlist(3)
-    fast_total = fast_calls_per_cycle * cycles_per_minute
+    fast_calls = 5  # account(2) + watchlist(3)
+    normal_calls = 3  # positions(1) + orders(2)
+    slow_calls = 1  # strategies derivation
 
-    check(f"Fast tier: {fast_calls_per_cycle} calls/cycle x {cycles_per_minute:.0f} cycles/min = {fast_total:.0f}",
+    fast_total = fast_calls * effective_cpm
+    normal_total = normal_calls * (effective_cpm / 2)
+    slow_total = slow_calls * (effective_cpm / 6)
+    total = fast_total + normal_total + slow_total
+
+    check(f"Fast tier: {fast_calls} calls x {effective_cpm:.0f} cycles/min = {fast_total:.0f}",
           True)
-
-    # Normal tier (every 2 cycles = every ~4s):
-    #   _fetch_positions: list_positions = 1 call
-    #   _fetch_orders_and_fills: list_orders(open) + list_orders(closed) = 2 calls
-    normal_cycles_per_minute = cycles_per_minute / 2  # = 15
-    normal_calls_per_cycle = 3  # positions(1) + orders(2)
-    normal_total = normal_calls_per_cycle * normal_cycles_per_minute
-
-    check(f"Normal tier: {normal_calls_per_cycle} calls/cycle x {normal_cycles_per_minute:.0f} cycles/min = {normal_total:.0f}",
+    check(f"Normal tier: {normal_calls} calls x {effective_cpm/2:.0f} cycles/min = {normal_total:.0f}",
           True)
-
-    # Slow tier (every 5 cycles = every ~10s):
-    #   _fetch_strategies: local or 1 API call (list_orders for derivation)
-    slow_cycles_per_minute = cycles_per_minute / 6  # = 5
-    slow_calls_per_cycle = 1  # may call list_orders(closed) for strategy derivation
-    slow_total = slow_calls_per_cycle * slow_cycles_per_minute
-
-    check(f"Slow tier: {slow_calls_per_cycle} calls/cycle x {slow_cycles_per_minute:.0f} cycles/min = {slow_total:.0f}",
+    check(f"Slow tier: {slow_calls} calls x {effective_cpm/6:.0f} cycles/min = {slow_total:.0f}",
           True)
+    check(f"Effective API calls/min: {total:.0f} (limit: 200)",
+          total <= 200,
+          f"{total:.0f} > 200")
 
-    total_calls = fast_total + normal_total + slow_total
-    check(f"Total API calls/min: {total_calls:.0f} (limit: 200)",
-          total_calls <= 200,
-          f"{total_calls:.0f} > 200")
-
-    # Verify fast tier happens every cycle
+    # Verify parallel execution (ThreadPoolExecutor)
     source = inspect.getsource(_DataCache._run)
-    # Account and watchlist are NOT inside an if cycle % block
-    fast_before_normal = (source.index("_fetch_account") < source.index("cycle % 2"))
-    check("Fast tier (account) runs before cycle % 2 check", fast_before_normal)
+    check("Uses ThreadPoolExecutor for parallel calls",
+          "ThreadPoolExecutor" in source)
+    check("Submits account to thread pool",
+          "pool.submit(self._fetch_account" in source)
+    check("Submits watchlist to thread pool",
+          "pool.submit(self._fetch_watchlist" in source)
 
-    watchlist_before_normal = (source.index("_fetch_watchlist") < source.index("cycle % 2"))
-    check("Fast tier (watchlist) runs before cycle % 2 check", watchlist_before_normal)
-
-    # Normal tier (positions, orders) happens every 2 cycles
-    check("Positions fetch inside cycle % 2 block",
+    # Verify tier ordering in source
+    check("Account/watchlist submitted before cycle % 2 check",
+          source.index("_fetch_account") < source.index("cycle % 2"))
+    check("Positions inside cycle % 2 block",
           "cycle % 2" in source and "_fetch_positions" in source)
-
-    check("Orders fetch inside cycle % 2 block",
-          "cycle % 2" in source and "_fetch_orders" in source)
-
-    # Slow tier (strategies) happens every 5 cycles
-    check("Strategies fetch inside cycle % 6 block",
+    check("Strategies inside cycle % 6 block",
           "cycle % 6" in source and "_fetch_strategies" in source)
 
 

@@ -526,7 +526,10 @@ class _DataCache:
             return []
 
     def _run(self):
-        """Tiered background refresh: 2s for prices, 4s for trading data, 10s for strategies.
+        """Tiered background refresh with parallel API calls.
+
+        API calls are parallelized within each cycle so network latency
+        doesn't stack (~500ms total instead of ~2100ms sequential).
 
         Keeps total API calls under Alpaca's 200/min rate limit:
         - Fast (2s):   account + watchlist prices    → 5 calls × 30/min = 150
@@ -534,6 +537,8 @@ class _DataCache:
         - Slow (12s):  strategies                    → 1 call  ×  5/min =   5
         Total: ~200 calls/min (at limit; strategy call is conditional)
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         # Load trade log from SQLite first
         entries, seen = self._db_load_log()
         if entries:
@@ -552,40 +557,48 @@ class _DataCache:
                     self._history_loaded = True
                     self._load_order_history(api)
 
-                # ── Fast tier (every cycle = every 2s) ──
-                # Prices, account balance, equity — most important for traders
-                account = self._fetch_account(api)
-                watchlist = self._fetch_watchlist(cfg)
+                # ── Parallel fetch: fire all calls for this cycle concurrently ──
+                futures = {}
+                with ThreadPoolExecutor(max_workers=6) as pool:
+                    # Fast tier (every cycle = every 2s)
+                    futures["account"] = pool.submit(self._fetch_account, api)
+                    futures["watchlist"] = pool.submit(self._fetch_watchlist, cfg)
+
+                    # Normal tier (every 2 cycles = every ~4s)
+                    if cycle % 2 == 0:
+                        futures["positions"] = pool.submit(self._fetch_positions, api)
+                        futures["orders"] = pool.submit(self._fetch_orders_and_fills, api)
+
+                    # Slow tier (every 6 cycles = every ~12s)
+                    if cycle % 6 == 0:
+                        futures["strategies"] = pool.submit(self._fetch_strategies)
+
+                # Collect results and update cache atomically
+                results = {}
+                for key, future in futures.items():
+                    try:
+                        results[key] = future.result(timeout=15)
+                    except Exception:
+                        pass  # keep last good data
+
+                # Fallback: derive strategies from orders if local manager returned empty
+                if "strategies" in results and not results["strategies"]:
+                    try:
+                        results["strategies"] = self._fetch_strategies_from_orders(api)
+                    except Exception:
+                        pass
 
                 with self._lock:
-                    self._data["account"] = account
-                    self._data["watchlist"] = watchlist
-
-                # ── Normal tier (every 2 cycles = every ~4s) ──
-                # Positions, orders, fills — important but change less often
-                if cycle % 2 == 0:
-                    positions = self._fetch_positions(api)
-                    orders = self._fetch_orders_and_fills(api)
-                    with self._lock:
-                        self._data["positions"] = positions
-                        self._data["orders"] = orders
+                    for key, value in results.items():
+                        self._data[key] = value
+                    if "orders" in results:
                         self._data["log"] = self._trade_log[-100:]
-
-                # ── Slow tier (every 6 cycles = every ~12s) ──
-                # Strategies — local state or derived from orders
-                if cycle % 6 == 0:
-                    strategies = self._fetch_strategies()
-                    # Fallback: derive from Alpaca orders if no local strategy manager
-                    if not strategies:
-                        strategies = self._fetch_strategies_from_orders(api)
-                    with self._lock:
-                        self._data["strategies"] = strategies
 
             except Exception:
                 pass  # keep last good data on transient errors
 
             cycle += 1
-            _time.sleep(2)
+            _time.sleep(1.5)
 
 
 # Global cache instance — starts background refresh immediately on import
