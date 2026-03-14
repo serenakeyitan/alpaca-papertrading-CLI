@@ -446,12 +446,16 @@ class _DataCache:
     def _fetch_strategies_from_orders(self, api):
         """Derive strategy info from Alpaca orders when no local StrategyManager exists.
 
-        Groups filled orders by strategy tag in client_order_id, calculates
-        P&L per strategy from fill prices. Works on Render without strategies_state.json.
+        Uses FIFO matching to calculate realized P&L only on completed
+        buy→sell round trips. Unrealized P&L uses current position market
+        prices from the cached positions data.
         """
         try:
             filled = api.list_orders(status="closed", limit=500)
             fills = [o for o in filled if o.status == "filled"]
+            # Sort chronologically for FIFO matching
+            fills.sort(key=lambda o: str(o.filled_at or o.submitted_at or ""))
+
             strats = {}
             for o in fills:
                 cid = o.client_order_id or ""
@@ -466,32 +470,56 @@ class _DataCache:
                         "capital": 0, "used": 0, "realized_pnl": 0,
                         "unrealized_pnl": 0, "total_pnl": 0, "fills": 0,
                         "last_tick": "---", "error_msg": "", "is_crypto": False,
-                        "_buys": [], "_sells": [],
+                        # FIFO queue: list of (remaining_qty, price) for open buys
+                        "_buy_queue": [],
+                        "_symbol": "",
                     }
                 s = strats[key]
                 s["fills"] += 1
+                s["_symbol"] = o.symbol
                 s["is_crypto"] = "/" in o.symbol or "eth" in sname.lower() or "btc" in sname.lower()
                 price = float(o.filled_avg_price) if o.filled_avg_price else 0
                 qty = float(o.qty) if o.qty else 0
                 if o.filled_at:
                     ts = _utc_to_local_str(o.filled_at)
-                    s["last_tick"] = ts[6:14] if len(ts) > 6 else ts  # HH:MM:SS
+                    s["last_tick"] = ts[6:14] if len(ts) > 6 else ts
+
                 if o.side == "buy":
-                    s["_buys"].append((qty, price))
+                    s["_buy_queue"].append([qty, price])  # mutable for FIFO
                     s["used"] += qty * price
                 else:
-                    s["_sells"].append((qty, price))
+                    # FIFO match sells against buys
+                    sell_remaining = qty
+                    while sell_remaining > 0 and s["_buy_queue"]:
+                        buy_qty, buy_price = s["_buy_queue"][0]
+                        matched = min(sell_remaining, buy_qty)
+                        s["realized_pnl"] += matched * (price - buy_price)
+                        sell_remaining -= matched
+                        s["_buy_queue"][0][0] -= matched
+                        if s["_buy_queue"][0][0] <= 1e-10:
+                            s["_buy_queue"].pop(0)
 
-            # Estimate P&L per strategy (simple: total sold - total bought)
+            # Get current positions for unrealized P&L
+            current_positions = {}
+            with self._lock:
+                for p in self._data.get("positions", []):
+                    current_positions[p["symbol"]] = p
+
             result = []
             for s in strats.values():
-                total_bought = sum(q * p for q, p in s["_buys"])
-                total_sold = sum(q * p for q, p in s["_sells"])
-                s["realized_pnl"] = round(total_sold - total_bought, 2)
-                s["total_pnl"] = s["realized_pnl"]
-                s["capital"] = round(total_bought, 2)
-                del s["_buys"]
-                del s["_sells"]
+                s["realized_pnl"] = round(s["realized_pnl"], 2)
+                # Unrealized: remaining buy queue matched against current price
+                symbol = s.pop("_symbol")
+                pos = current_positions.get(symbol)
+                if pos and s["_buy_queue"]:
+                    current_price = pos["current"]
+                    unrealized = sum(
+                        q * (current_price - p) for q, p in s["_buy_queue"]
+                    )
+                    s["unrealized_pnl"] = round(unrealized, 2)
+                s["total_pnl"] = round(s["realized_pnl"] + s["unrealized_pnl"], 2)
+                s["capital"] = round(s["used"], 2)
+                del s["_buy_queue"]
                 result.append(s)
             return result
         except Exception:
