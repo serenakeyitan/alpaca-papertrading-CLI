@@ -30,6 +30,11 @@ if str(SKILL_DIR) not in sys.path:
 
 from web_dashboard import app
 
+# Wait for background cache to complete its first fetch cycle
+import time as _time
+print("  Waiting for background cache to populate...")
+_time.sleep(8)
+
 passed = 0
 failed = 0
 

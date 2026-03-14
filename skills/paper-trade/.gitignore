@@ -24,6 +24,7 @@ grid_state.json
 *.log
 price_cache.json
 trade_log.txt
+dashboard_cache.db
 
 # IDE
 .vscode/

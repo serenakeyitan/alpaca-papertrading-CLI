@@ -41,11 +41,6 @@ DEFAULT_WATCHLIST = ["NVDA", "AAPL", "SPY", "GOOGL", "MSFT", "AMZN", "TSLA", "ME
 
 app = Flask(__name__)
 
-# ── In-memory trade log ─────────────────────────────────────
-_trade_log = []
-_seen_order_ids = set()
-_history_loaded = False
-
 
 def _load_config():
     # Environment variables first (for cloud deployment: Render, Railway, etc.)
@@ -74,19 +69,6 @@ def _load_watchlist():
     return list(DEFAULT_WATCHLIST)
 
 
-def _log_entry(msg, style="dim"):
-    ts = datetime.now().strftime("%m/%d %H:%M:%S")
-    _trade_log.append({"ts": ts, "msg": msg, "style": style})
-    if len(_trade_log) > 200:
-        _trade_log.pop(0)
-    # Also persist to file
-    try:
-        with open(TRADE_LOG_PATH, "a") as f:
-            f.write(f"{ts}  {msg}\n")
-    except Exception:
-        pass
-
-
 def _get_strategy_manager():
     try:
         from strategy_manager import StrategyManager
@@ -95,12 +77,89 @@ def _get_strategy_manager():
         return None
 
 
-# ── API endpoints ──────────────────────────────────────────
+# ── Background data cache ──────────────────────────────────
+# A single background thread fetches ALL data from Alpaca every 5 seconds.
+# API endpoints serve instantly from cache — no Alpaca calls on request.
+# 10 browser tabs = same 1 set of API calls per cycle, not 10x.
 
-@app.route("/api/account")
-def api_account():
-    try:
-        api = _get_api()
+import threading
+import time as _time
+import re as _re
+import sqlite3
+
+_DB_PATH = SKILL_DIR / "dashboard_cache.db"
+
+
+class _DataCache:
+    """Thread-safe cache populated by a background worker."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {
+            "account": {"error": "loading..."},
+            "positions": [],
+            "watchlist": [],
+            "orders": [],
+            "strategies": [],
+            "log": [],
+        }
+        self._seen_order_ids = set()
+        self._trade_log = []
+        self._history_loaded = False
+        self._init_db()
+
+    # ── SQLite for trade log persistence ───────────────────
+
+    def _init_db(self):
+        """Create trade log table if it doesn't exist."""
+        with sqlite3.connect(str(_DB_PATH)) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    msg TEXT NOT NULL,
+                    style TEXT NOT NULL DEFAULT 'dim',
+                    order_id TEXT,
+                    created_at REAL DEFAULT (strftime('%s','now'))
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trade_log_order_id
+                ON trade_log(order_id)
+            """)
+            conn.commit()
+
+    def _db_load_log(self):
+        """Load trade log from SQLite on startup."""
+        with sqlite3.connect(str(_DB_PATH)) as conn:
+            rows = conn.execute(
+                "SELECT ts, msg, style, order_id FROM trade_log ORDER BY id DESC LIMIT 200"
+            ).fetchall()
+        entries = [{"ts": r[0], "msg": r[1], "style": r[2]} for r in reversed(rows)]
+        seen = {r[3] for r in rows if r[3]}
+        return entries, seen
+
+    def _db_insert_log(self, ts, msg, style, order_id=None):
+        """Insert a trade log entry into SQLite."""
+        try:
+            with sqlite3.connect(str(_DB_PATH)) as conn:
+                conn.execute(
+                    "INSERT INTO trade_log (ts, msg, style, order_id) VALUES (?, ?, ?, ?)",
+                    (ts, msg, style, order_id),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    # ── Cache read (instant, thread-safe) ──────────────────
+
+    def get(self, key):
+        with self._lock:
+            return self._data.get(key)
+
+    # ── Background fetch functions ─────────────────────────
+
+    def _fetch_account(self, api):
         acct = api.get_account()
         equity = float(acct.equity)
         last_equity = float(acct.last_equity)
@@ -108,12 +167,7 @@ def api_account():
         pnl_pct = (pnl / last_equity * 100) if last_equity else 0
         clock = api.get_clock()
 
-        # Strategy summary
-        strat_pnl = 0
-        strat_deployed = 0
-        strat_allocated = 0
-        strat_active = 0
-        strat_total = 0
+        strat_pnl = strat_deployed = strat_allocated = strat_active = strat_total = 0
         sm = _get_strategy_manager()
         if sm:
             try:
@@ -126,7 +180,6 @@ def api_account():
             except Exception:
                 pass
 
-        # Read tunnel URL if available
         tunnel_url = ""
         tunnel_file = SKILL_DIR / ".tunnel_url"
         if tunnel_file.exists():
@@ -135,7 +188,7 @@ def api_account():
             except Exception:
                 pass
 
-        return jsonify({
+        return {
             "equity": equity,
             "cash": float(acct.cash),
             "buying_power": float(acct.buying_power),
@@ -149,15 +202,9 @@ def api_account():
             "strat_active": strat_active,
             "strat_total": strat_total,
             "tunnel_url": tunnel_url,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        }
 
-
-@app.route("/api/positions")
-def api_positions():
-    try:
-        api = _get_api()
+    def _fetch_positions(self, api):
         positions = api.list_positions()
         result = []
         for p in positions:
@@ -173,20 +220,13 @@ def api_positions():
                 "asset_class": p.asset_class,
             })
         result.sort(key=lambda x: abs(x["market_value"]), reverse=True)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return result
 
-
-@app.route("/api/watchlist")
-def api_watchlist():
-    try:
+    def _fetch_watchlist(self, cfg):
         symbols = _load_watchlist()
         stocks = [s for s in symbols if "/" not in s]
         cryptos = [s for s in symbols if "/" in s]
         result = []
-
-        cfg = _load_config()
         headers = {
             "APCA-API-KEY-ID": cfg["api_key"],
             "APCA-API-SECRET-KEY": cfg["secret_key"],
@@ -215,14 +255,12 @@ def api_watchlist():
 
         if cryptos:
             try:
-                # Get current prices
                 r = http_requests.get(
                     "https://data.alpaca.markets/v1beta3/crypto/us/latest/trades",
                     params={"symbols": ",".join(cryptos)},
                     headers=headers, timeout=10,
                 )
                 trades = r.json()
-                # Get today's open for change calculation
                 r2 = http_requests.get(
                     "https://data.alpaca.markets/v1beta3/crypto/us/bars",
                     params={"symbols": ",".join(cryptos), "timeframe": "1Day", "limit": 1},
@@ -235,7 +273,6 @@ def api_watchlist():
                         price = trades["trades"][sym].get("p", 0)
                     elif "trades" in trades and sym.replace("/", "") in trades["trades"]:
                         price = trades["trades"][sym.replace("/", "")].get("p", 0)
-                    # Change from today's open
                     change = 0
                     sym_bars = bars_data.get(sym, [])
                     if sym_bars and price:
@@ -249,22 +286,14 @@ def api_watchlist():
             except Exception:
                 pass
 
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return result
 
-
-@app.route("/api/orders")
-def api_orders():
-    global _seen_order_ids
-    try:
-        api = _get_api()
+    def _fetch_orders_and_fills(self, api):
         orders = api.list_orders(status="open", limit=50)
         result = []
         current_ids = set()
         for o in orders:
             current_ids.add(o.id)
-            # Extract strategy name from client_order_id
             strategy = "manual"
             if o.client_order_id:
                 coid = str(o.client_order_id)
@@ -273,9 +302,7 @@ def api_orders():
                         parts = coid.split("_", 2)
                         strategy = f"{parts[0]}-{parts[1]}" if len(parts) > 1 else parts[0]
                         break
-
-            time_str = _utc_to_local_str(o.submitted_at)[:11]  # MM/DD HH:MM
-
+            time_str = _utc_to_local_str(o.submitted_at)[:11]
             result.append({
                 "id": o.id,
                 "symbol": o.symbol,
@@ -290,52 +317,46 @@ def api_orders():
             })
 
         # Detect new orders for trade log
-        if _seen_order_ids:
-            new_ids = current_ids - _seen_order_ids
+        if self._seen_order_ids:
+            new_ids = current_ids - self._seen_order_ids
             for o in result:
                 if o["id"] in new_ids:
                     side_txt = o["side"].upper()
                     price_txt = f"@ ${o['limit_price']:.2f}" if o["limit_price"] else "MKT"
-                    _log_entry(
-                        f"NEW {side_txt} {o['symbol']} x{o['qty']:.0f} {price_txt} {o['type']} [{o['strategy']}]",
-                        "new"
-                    )
-        # Merge open IDs into seen set (don't replace — keep historical fills)
-        _seen_order_ids.update(current_ids)
+                    ts = datetime.now().strftime("%m/%d %H:%M:%S")
+                    msg = f"NEW {side_txt} {o['symbol']} x{o['qty']:.0f} {price_txt} {o['type']} [{o['strategy']}]"
+                    self._trade_log.append({"ts": ts, "msg": msg, "style": "new"})
+                    self._db_insert_log(ts, msg, "new", o["id"])
+        self._seen_order_ids.update(current_ids)
 
-        # Also check recent filled orders for the log
+        # Check recent filled orders
         try:
             filled = api.list_orders(status="closed", limit=20)
             for o in filled:
-                if o.status == "filled" and o.id not in _seen_order_ids:
-                    _seen_order_ids.add(o.id)
+                if o.status == "filled" and o.id not in self._seen_order_ids:
+                    self._seen_order_ids.add(o.id)
                     if o.filled_at:
                         side_txt = o.side.upper()
                         price = float(o.filled_avg_price) if o.filled_avg_price else 0
                         qty = float(o.qty) if o.qty else 0
                         qty_fmt = f"{qty:.6f}".rstrip("0").rstrip(".") if qty % 1 else f"{qty:.0f}"
                         ts = _utc_to_local_str(o.filled_at)
-                        _trade_log.append({
-                            "ts": ts,
-                            "msg": f"FILL {side_txt} {o.symbol} x{qty_fmt} @ ${price:,.2f}",
-                            "style": "fill-buy" if o.side == "buy" else "fill-sell",
-                        })
-                        if len(_trade_log) > 200:
-                            _trade_log.pop(0)
+                        msg = f"FILL {side_txt} {o.symbol} x{qty_fmt} @ ${price:,.2f}"
+                        self._trade_log.append({"ts": ts, "msg": msg,
+                            "style": "fill-buy" if o.side == "buy" else "fill-sell"})
+                        self._db_insert_log(ts, msg,
+                            "fill-buy" if o.side == "buy" else "fill-sell", o.id)
+                        if len(self._trade_log) > 200:
+                            self._trade_log.pop(0)
         except Exception:
             pass
 
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return result
 
-
-@app.route("/api/strategies")
-def api_strategies():
-    try:
+    def _fetch_strategies(self):
         sm = _get_strategy_manager()
         if not sm:
-            return jsonify([])
+            return []
         strategies = sm.list_strategies()
         result = []
         for s in strategies:
@@ -344,15 +365,11 @@ def api_strategies():
                 try:
                     raw = str(s["last_tick"]).replace("Z", "+00:00")
                     dt = datetime.fromisoformat(raw)
-                    # Convert UTC to local time
                     local_dt = dt.astimezone()
                     last_tick = local_dt.strftime("%H:%M:%S")
                 except Exception:
                     last_tick = str(s["last_tick"])[:8]
-
-            # Determine if this is a crypto strategy
             is_crypto = "/" in str(s.get("name", "")) or "eth" in str(s.get("name", "")).lower() or "btc" in str(s.get("name", "")).lower()
-
             result.append({
                 "name": s.get("name", ""),
                 "type": s.get("type", ""),
@@ -367,21 +384,137 @@ def api_strategies():
                 "error_msg": s.get("error_msg", ""),
                 "is_crypto": is_crypto,
             })
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return result
+
+    def _load_order_history(self, api):
+        """Load historical fills from Alpaca into SQLite (one-time)."""
+        try:
+            orders = api.list_orders(status="closed", limit=500)
+            fills = [o for o in orders if o.status == "filled"]
+            seen_ids = set()
+            unique_fills = []
+            for o in fills:
+                if o.id not in seen_ids:
+                    seen_ids.add(o.id)
+                    unique_fills.append(o)
+            fills = unique_fills
+            fills.sort(key=lambda o: str(o.filled_at or o.submitted_at or ""))
+
+            for o in fills:
+                if o.id in self._seen_order_ids:
+                    continue
+                self._seen_order_ids.add(o.id)
+                ts = _utc_to_local_str(o.filled_at or o.submitted_at)
+                side_txt = o.side.upper()
+                qty = float(o.qty) if o.qty else 0
+                price = float(o.filled_avg_price) if o.filled_avg_price else 0
+                sym = o.symbol
+                cid = o.client_order_id or ""
+                strat_tag = ""
+                m = _re.match(r'^(grid|dca|momentum|mean_reversion|dip_buyer|momentum_scalper)_([^_]+)_', cid)
+                if m:
+                    strat_tag = f" [{m.group(2)}]"
+                style = "fill-buy" if o.side == "buy" else "fill-sell"
+                qty_fmt = f"{qty:.6f}".rstrip("0").rstrip(".") if qty % 1 else f"{qty:.0f}"
+                msg = f"FILL {side_txt} {sym} x{qty_fmt} @ ${price:,.2f}{strat_tag}"
+                self._trade_log.append({"ts": ts, "msg": msg, "style": style})
+                self._db_insert_log(ts, msg, style, o.id)
+
+            if fills:
+                ts = datetime.now().strftime("%m/%d %H:%M:%S")
+                msg = f"Loaded {len(fills)} historical fills from Alpaca"
+                self._trade_log.append({"ts": ts, "msg": msg, "style": "info"})
+                self._db_insert_log(ts, msg, "info")
+        except Exception as e:
+            ts = datetime.now().strftime("%m/%d %H:%M:%S")
+            msg = f"Error loading history: {e}"
+            self._trade_log.append({"ts": ts, "msg": msg, "style": "dim"})
+
+    # ── Main background loop ───────────────────────────────
+
+    def start(self):
+        """Start the background refresh thread."""
+        t = threading.Thread(target=self._run, daemon=True)
+        t.start()
+
+    def _run(self):
+        """Fetch all data every 5 seconds, update cache atomically."""
+        # Load trade log from SQLite first
+        entries, seen = self._db_load_log()
+        if entries:
+            self._trade_log = entries
+            self._seen_order_ids = seen
+            self._history_loaded = True
+
+        while True:
+            try:
+                api = _get_api()
+                cfg = _load_config()
+
+                # Load history on first run if DB was empty
+                if not self._history_loaded:
+                    self._history_loaded = True
+                    self._load_order_history(api)
+
+                # Fetch all data (single set of API calls)
+                account = self._fetch_account(api)
+                positions = self._fetch_positions(api)
+                watchlist = self._fetch_watchlist(cfg)
+                orders = self._fetch_orders_and_fills(api)
+                strategies = self._fetch_strategies()
+
+                # Atomic cache update
+                with self._lock:
+                    self._data["account"] = account
+                    self._data["positions"] = positions
+                    self._data["watchlist"] = watchlist
+                    self._data["orders"] = orders
+                    self._data["strategies"] = strategies
+                    self._data["log"] = self._trade_log[-100:]
+
+            except Exception as e:
+                with self._lock:
+                    if "error" not in str(self._data.get("account", {})):
+                        pass  # keep last good data on transient errors
+
+            _time.sleep(5)
+
+
+# Global cache instance — starts background refresh immediately on import
+_cache = _DataCache()
+_cache.start()
+
+
+# ── API endpoints (serve from cache — instant) ─────────────
+
+@app.route("/api/account")
+def api_account():
+    return jsonify(_cache.get("account"))
+
+
+@app.route("/api/positions")
+def api_positions():
+    return jsonify(_cache.get("positions"))
+
+
+@app.route("/api/watchlist")
+def api_watchlist():
+    return jsonify(_cache.get("watchlist"))
+
+
+@app.route("/api/orders")
+def api_orders():
+    return jsonify(_cache.get("orders"))
+
+
+@app.route("/api/strategies")
+def api_strategies():
+    return jsonify(_cache.get("strategies"))
 
 
 @app.route("/api/log")
 def api_log():
-    global _history_loaded
-    if not _history_loaded:
-        _history_loaded = True
-        try:
-            _load_order_history()
-        except Exception as e:
-            _log_entry(f"Error loading history: {e}", "dim")
-    return jsonify(_trade_log[-100:])
+    return jsonify(_cache.get("log"))
 
 
 def _utc_to_local_str(ts_obj):
@@ -407,52 +540,6 @@ def _utc_to_local_str(ts_obj):
         return local_dt.strftime("%m/%d %H:%M:%S")
     except Exception:
         return "---"
-
-
-def _load_order_history():
-    """Load recent filled orders from Alpaca into the trade log on first request."""
-    import re
-    try:
-        api = _get_api()
-        # Use status="closed" to get only filled/cancelled, more fills per request
-        orders = api.list_orders(status="closed", limit=500)
-        fills = [o for o in orders if o.status == "filled"]
-        # Deduplicate by order ID
-        seen_ids = set()
-        unique_fills = []
-        for o in fills:
-            if o.id not in seen_ids:
-                seen_ids.add(o.id)
-                unique_fills.append(o)
-        fills = unique_fills
-        # Sort oldest first
-        fills.sort(key=lambda o: str(o.filled_at or o.submitted_at or ""))
-
-        for o in fills:
-            _seen_order_ids.add(o.id)
-            ts = _utc_to_local_str(o.filled_at or o.submitted_at)
-
-            side_txt = o.side.upper()
-            qty = float(o.qty) if o.qty else 0
-            price = float(o.filled_avg_price) if o.filled_avg_price else 0
-            sym = o.symbol
-
-            # Extract strategy tag
-            cid = o.client_order_id or ""
-            strat_tag = ""
-            m = re.match(r'^(grid|dca|momentum|mean_reversion|dip_buyer|momentum_scalper)_([^_]+)_', cid)
-            if m:
-                strat_tag = f" [{m.group(2)}]"
-
-            style = "fill-buy" if o.side == "buy" else "fill-sell"
-            qty_fmt = f"{qty:.6f}".rstrip("0").rstrip(".") if qty % 1 else f"{qty:.0f}"
-            msg = f"FILL {side_txt} {sym} x{qty_fmt} @ ${price:,.2f}{strat_tag}"
-            _trade_log.append({"ts": ts, "msg": msg, "style": style})
-
-        if fills:
-            _log_entry(f"Loaded {len(fills)} historical fills from Alpaca", "info")
-    except Exception as e:
-        _log_entry(f"Error loading history: {e}", "dim")
 
 
 @app.route("/api/bars/<path:symbol>")
@@ -1353,6 +1440,7 @@ if __name__ == "__main__":
             print(f"\n  📊 Alpaca Paper Trading Dashboard")
             print(f"  ─────────────────────────────────")
             print(f"  Local:  http://{args.host}:{args.port}")
+            print(f"  Cache:  background refresh every 5s")
             print(f"  Tip:    Run 'bash scripts/start-web.sh' for auto-tunnel\n")
 
         from waitress import serve
