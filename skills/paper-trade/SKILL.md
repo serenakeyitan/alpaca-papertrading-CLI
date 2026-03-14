@@ -47,8 +47,8 @@ The user will speak in natural language. Map their intent to actions:
 | "how am I doing" | `alpaca analytics stats` |
 | "run DCA $200 into SPY" | `alpaca strategy run dca -p symbol=SPY -p amount=200` |
 | "rebalance 50% AAPL 50% MSFT" | `alpaca strategy run rebalance -p 'targets={"AAPL":0.5,"MSFT":0.5}'` |
-| "open the dashboard" | `bash scripts/start-web.sh` |
-| "share dashboard link" | `bash scripts/start-web.sh` (outputs public URL) |
+| "open the dashboard" | Dashboard is always running — just show the link (see Auto-Start Dashboard) |
+| "share dashboard link" | Show the ngrok/tunnel URL from `.tunnel_url` |
 | "get a permanent link" | `bash scripts/setup-link.sh` (free ngrok static domain) |
 | "start auto-trading" | Set up cron with `scripts/auto-tick.py` |
 
@@ -86,6 +86,53 @@ Config lives at `~/.alpaca-cli/config.json` or `skills/paper-trade/config.json`:
 5. **All CLI output** uses Rich colored formatting with fallback to plain text.
 6. **`--json` flag** available on all CLI commands for machine-readable output.
 7. **Market hours** — stock strategies show "MKT CLOSED" outside US market hours; crypto trades 24/7.
+
+## Auto-Start Dashboard (IMPORTANT)
+
+**On first interaction in any session**, the agent MUST ensure the dashboard and tunnel are running, then show the user their link. Follow these steps:
+
+### Step 1: Check if dashboard is already running
+```bash
+lsof -ti :8888 >/dev/null 2>&1 && echo "RUNNING" || echo "STOPPED"
+```
+
+### Step 2: Check if ngrok tunnel is already running
+```bash
+curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null | python3 -c "import sys,json; t=json.load(sys.stdin)['tunnels']; print(t[0]['public_url'] if t else '')" 2>/dev/null || echo ""
+```
+Also check the `.tunnel_url` file:
+```bash
+cat skills/paper-trade/.tunnel_url 2>/dev/null || echo ""
+```
+
+### Step 3: Start what's missing
+- If dashboard is NOT running: start it in the background
+  ```bash
+  cd skills/paper-trade && .venv/bin/python web_dashboard.py --port 8888 &>/tmp/openclaw-dashboard.log &
+  ```
+- If tunnel is NOT running AND a permanent ngrok config exists (`~/.alpaca-cli/tunnel.json`):
+  ```bash
+  DOMAIN=$(python3 -c "import json; print(json.load(open('$HOME/.alpaca-cli/tunnel.json')).get('domain',''))" 2>/dev/null)
+  ngrok http 8888 --url="$DOMAIN" --log=stdout --log-format=json >/tmp/ngrok-dashboard.log 2>&1 &
+  echo "https://$DOMAIN" > skills/paper-trade/.tunnel_url
+  ```
+- If no ngrok config exists, use cloudflared quick tunnel (temporary):
+  ```bash
+  cloudflared tunnel --url http://127.0.0.1:8888 --no-autoupdate 2>/tmp/cloudflared-tunnel.log &
+  # wait for URL, write to .tunnel_url
+  ```
+
+### Step 4: Show the link to the user
+Always show the user their dashboard link at the start of the session:
+```
+📊 Dashboard live at: https://<their-domain>.ngrok-free.app
+   (auto-refreshes every 5s — all trades and price changes appear in real time)
+```
+
+### Key behaviors:
+- **Never kill the tunnel** — the dashboard and tunnel run independently of the agent. When the user asks to buy, sell, or run strategies, just execute the CLI commands. The dashboard auto-refreshes from Alpaca APIs every 5 seconds, so all changes appear automatically.
+- **No restart needed** — executing trades, adding strategies, or changing positions does NOT require restarting the dashboard or tunnel. The dashboard polls live data.
+- **If no permanent link is set up**, tell the user they can get one with `bash scripts/setup-link.sh` (free, 2 minutes).
 
 ## Web Dashboard
 
