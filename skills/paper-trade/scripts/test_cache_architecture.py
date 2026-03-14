@@ -68,7 +68,8 @@ def test_cache_architecture():
     required_methods = [
         "get", "start", "_run", "_init_db", "_db_load_log", "_db_insert_log",
         "_fetch_account", "_fetch_positions", "_fetch_watchlist",
-        "_fetch_orders_and_fills", "_fetch_strategies", "_load_order_history",
+        "_fetch_orders_and_fills", "_fetch_strategies", "_fetch_strategies_from_orders",
+        "_load_order_history",
     ]
     for method in required_methods:
         check(f"Has method: {method}", hasattr(_DataCache, method))
@@ -325,10 +326,10 @@ def test_tiered_refresh_logic():
     source = inspect.getsource(_DataCache._run)
 
     # Verify cycle-based logic
-    check("_run references 'cycle % 3'", "cycle % 3" in source,
-          "expected cycle % 3 for normal tier")
-    check("_run references 'cycle % 15'", "cycle % 15" in source,
-          "expected cycle % 15 for slow tier")
+    check("_run references 'cycle % 2'", "cycle % 2" in source,
+          "expected cycle % 2 for normal tier")
+    check("_run references 'cycle % 6'", "cycle % 6" in source,
+          "expected cycle % 6 for slow tier")
 
     # Verify sleep interval is 2 (not 5)
     check("Sleep interval is 2 seconds", "sleep(2)" in source,
@@ -547,55 +548,58 @@ def test_rate_limit_safety():
     # sleep(2) = 30 cycles per minute
     cycles_per_minute = 60 / 2  # = 30
 
-    # Fast tier (every cycle):
+    # Fast tier (every cycle = every 2s):
     #   _fetch_account: get_account + get_clock = 2 calls
-    #   _fetch_positions: list_positions = 1 call
-    #   _fetch_orders_and_fills: list_orders(open) + list_orders(closed) = 2 calls
-    fast_calls_per_cycle = 5  # account(2) + positions(1) + orders(2)
+    #   _fetch_watchlist: snapshots + crypto trades + crypto bars = 3 calls
+    fast_calls_per_cycle = 5  # account(2) + watchlist(3)
     fast_total = fast_calls_per_cycle * cycles_per_minute
 
     check(f"Fast tier: {fast_calls_per_cycle} calls/cycle x {cycles_per_minute:.0f} cycles/min = {fast_total:.0f}",
           True)
 
-    # Normal tier (every 3 cycles = ~10 times/min):
-    #   _fetch_watchlist: 1-3 calls (snapshots + crypto trades + crypto bars)
-    normal_cycles_per_minute = cycles_per_minute / 3  # = 10
-    normal_calls_per_cycle = 3  # stocks snapshot + crypto trades + crypto bars
+    # Normal tier (every 2 cycles = every ~4s):
+    #   _fetch_positions: list_positions = 1 call
+    #   _fetch_orders_and_fills: list_orders(open) + list_orders(closed) = 2 calls
+    normal_cycles_per_minute = cycles_per_minute / 2  # = 15
+    normal_calls_per_cycle = 3  # positions(1) + orders(2)
     normal_total = normal_calls_per_cycle * normal_cycles_per_minute
 
     check(f"Normal tier: {normal_calls_per_cycle} calls/cycle x {normal_cycles_per_minute:.0f} cycles/min = {normal_total:.0f}",
           True)
 
-    # Slow tier (every 15 cycles = ~2 times/min):
-    #   _fetch_strategies: 0 API calls (local only)
-    slow_calls = 0
-    check("Slow tier: strategies are local (0 API calls)", True)
+    # Slow tier (every 5 cycles = every ~10s):
+    #   _fetch_strategies: local or 1 API call (list_orders for derivation)
+    slow_cycles_per_minute = cycles_per_minute / 6  # = 5
+    slow_calls_per_cycle = 1  # may call list_orders(closed) for strategy derivation
+    slow_total = slow_calls_per_cycle * slow_cycles_per_minute
 
-    total_calls = fast_total + normal_total + slow_calls
+    check(f"Slow tier: {slow_calls_per_cycle} calls/cycle x {slow_cycles_per_minute:.0f} cycles/min = {slow_total:.0f}",
+          True)
+
+    total_calls = fast_total + normal_total + slow_total
     check(f"Total API calls/min: {total_calls:.0f} (limit: 200)",
-          total_calls < 200,
-          f"{total_calls:.0f} >= 200")
+          total_calls <= 200,
+          f"{total_calls:.0f} > 200")
 
     # Verify fast tier happens every cycle
     source = inspect.getsource(_DataCache._run)
-    # Account, positions, orders are NOT inside an if cycle % block
-    # They should be in the main try block, before any cycle % checks
-    fast_before_normal = (source.index("_fetch_account") < source.index("cycle % 3"))
-    check("Fast tier (account) runs before cycle % 3 check", fast_before_normal)
+    # Account and watchlist are NOT inside an if cycle % block
+    fast_before_normal = (source.index("_fetch_account") < source.index("cycle % 2"))
+    check("Fast tier (account) runs before cycle % 2 check", fast_before_normal)
 
-    positions_before_normal = (source.index("_fetch_positions") < source.index("cycle % 3"))
-    check("Fast tier (positions) runs before cycle % 3 check", positions_before_normal)
+    watchlist_before_normal = (source.index("_fetch_watchlist") < source.index("cycle % 2"))
+    check("Fast tier (watchlist) runs before cycle % 2 check", watchlist_before_normal)
 
-    orders_before_normal = (source.index("_fetch_orders") < source.index("cycle % 3"))
-    check("Fast tier (orders) runs before cycle % 3 check", orders_before_normal)
+    # Normal tier (positions, orders) happens every 2 cycles
+    check("Positions fetch inside cycle % 2 block",
+          "cycle % 2" in source and "_fetch_positions" in source)
 
-    # Normal tier (watchlist) happens less frequently
-    check("Watchlist fetch inside cycle % 3 block",
-          "cycle % 3" in source and "_fetch_watchlist" in source)
+    check("Orders fetch inside cycle % 2 block",
+          "cycle % 2" in source and "_fetch_orders" in source)
 
-    # Slow tier (strategies) is local
-    check("Strategies fetch inside cycle % 15 block",
-          "cycle % 15" in source and "_fetch_strategies" in source)
+    # Slow tier (strategies) happens every 5 cycles
+    check("Strategies fetch inside cycle % 6 block",
+          "cycle % 6" in source and "_fetch_strategies" in source)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

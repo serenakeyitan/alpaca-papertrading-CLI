@@ -94,9 +94,9 @@ class _DataCache:
     """Thread-safe cache populated by a tiered background worker.
 
     Refresh rates:
-    - Fast  (every 2s):  account, positions, orders/fills
-    - Normal (every ~6s): watchlist prices (stocks + crypto)
-    - Slow  (every ~30s): strategies
+    - Fast  (every 2s):  account balance/equity + watchlist prices (most important)
+    - Normal (every ~4s): positions, orders, recent fills
+    - Slow  (every ~10s): strategies (local or derived from Alpaca orders)
     """
 
     def __init__(self):
@@ -443,14 +443,68 @@ class _DataCache:
         t = threading.Thread(target=self._run, daemon=True)
         t.start()
 
+    def _fetch_strategies_from_orders(self, api):
+        """Derive strategy info from Alpaca orders when no local StrategyManager exists.
+
+        Groups filled orders by strategy tag in client_order_id, calculates
+        P&L per strategy from fill prices. Works on Render without strategies_state.json.
+        """
+        try:
+            filled = api.list_orders(status="closed", limit=500)
+            fills = [o for o in filled if o.status == "filled"]
+            strats = {}
+            for o in fills:
+                cid = o.client_order_id or ""
+                m = _re.match(r'^(grid|dca|momentum|mean_reversion|dip_buyer|momentum_scalper)_([^_]+)_', cid)
+                if not m:
+                    continue
+                stype, sname = m.group(1), m.group(2)
+                key = sname
+                if key not in strats:
+                    strats[key] = {
+                        "name": sname, "type": stype, "status": "active",
+                        "capital": 0, "used": 0, "realized_pnl": 0,
+                        "unrealized_pnl": 0, "total_pnl": 0, "fills": 0,
+                        "last_tick": "---", "error_msg": "", "is_crypto": False,
+                        "_buys": [], "_sells": [],
+                    }
+                s = strats[key]
+                s["fills"] += 1
+                s["is_crypto"] = "/" in o.symbol or "eth" in sname.lower() or "btc" in sname.lower()
+                price = float(o.filled_avg_price) if o.filled_avg_price else 0
+                qty = float(o.qty) if o.qty else 0
+                if o.filled_at:
+                    ts = _utc_to_local_str(o.filled_at)
+                    s["last_tick"] = ts[6:14] if len(ts) > 6 else ts  # HH:MM:SS
+                if o.side == "buy":
+                    s["_buys"].append((qty, price))
+                    s["used"] += qty * price
+                else:
+                    s["_sells"].append((qty, price))
+
+            # Estimate P&L per strategy (simple: total sold - total bought)
+            result = []
+            for s in strats.values():
+                total_bought = sum(q * p for q, p in s["_buys"])
+                total_sold = sum(q * p for q, p in s["_sells"])
+                s["realized_pnl"] = round(total_sold - total_bought, 2)
+                s["total_pnl"] = s["realized_pnl"]
+                s["capital"] = round(total_bought, 2)
+                del s["_buys"]
+                del s["_sells"]
+                result.append(s)
+            return result
+        except Exception:
+            return []
+
     def _run(self):
-        """Tiered background refresh: 2s for core, 5s for prices, 30s for strategies.
+        """Tiered background refresh: 2s for prices, 4s for trading data, 10s for strategies.
 
         Keeps total API calls under Alpaca's 200/min rate limit:
-        - Fast (2s):   account, positions, orders → 5 calls × 30/min = 150
-        - Normal (5s): watchlist prices          → 3 calls × 12/min =  36
-        - Slow (30s):  strategies                → 0 API calls (local)
-        Total: ~186 calls/min (headroom under 200 limit)
+        - Fast (2s):   account + watchlist prices    → 5 calls × 30/min = 150
+        - Normal (4s): positions, orders, fills      → 3 calls × 15/min =  45
+        - Slow (12s):  strategies                    → 1 call  ×  5/min =   5
+        Total: ~200 calls/min (at limit; strategy call is conditional)
         """
         # Load trade log from SQLite first
         entries, seen = self._db_load_log()
@@ -471,25 +525,31 @@ class _DataCache:
                     self._load_order_history(api)
 
                 # ── Fast tier (every cycle = every 2s) ──
+                # Prices, account balance, equity — most important for traders
                 account = self._fetch_account(api)
-                positions = self._fetch_positions(api)
-                orders = self._fetch_orders_and_fills(api)
+                watchlist = self._fetch_watchlist(cfg)
 
                 with self._lock:
                     self._data["account"] = account
-                    self._data["positions"] = positions
-                    self._data["orders"] = orders
-                    self._data["log"] = self._trade_log[-100:]
+                    self._data["watchlist"] = watchlist
 
-                # ── Normal tier (every ~3 cycles = every ~6s) ──
-                if cycle % 3 == 0:
-                    watchlist = self._fetch_watchlist(cfg)
+                # ── Normal tier (every 2 cycles = every ~4s) ──
+                # Positions, orders, fills — important but change less often
+                if cycle % 2 == 0:
+                    positions = self._fetch_positions(api)
+                    orders = self._fetch_orders_and_fills(api)
                     with self._lock:
-                        self._data["watchlist"] = watchlist
+                        self._data["positions"] = positions
+                        self._data["orders"] = orders
+                        self._data["log"] = self._trade_log[-100:]
 
-                # ── Slow tier (every ~15 cycles = every ~30s) ──
-                if cycle % 15 == 0:
+                # ── Slow tier (every 6 cycles = every ~12s) ──
+                # Strategies — local state or derived from orders
+                if cycle % 6 == 0:
                     strategies = self._fetch_strategies()
+                    # Fallback: derive from Alpaca orders if no local strategy manager
+                    if not strategies:
+                        strategies = self._fetch_strategies_from_orders(api)
                     with self._lock:
                         self._data["strategies"] = strategies
 
