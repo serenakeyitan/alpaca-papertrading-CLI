@@ -19,7 +19,6 @@ venv/
 env/
 
 # State/logs (generated at runtime)
-strategies_state.json
 grid_state.json
 *.log
 price_cache.json

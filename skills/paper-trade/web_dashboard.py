@@ -350,10 +350,15 @@ class _DataCache:
 
         return result
 
-    def _fetch_strategies(self):
+    def _tick_and_fetch_strategies(self, api):
+        """Tick all active strategies, then return their current state."""
         sm = _get_strategy_manager()
         if not sm:
             return []
+        try:
+            sm.tick_all(api)
+        except Exception:
+            pass
         strategies = sm.list_strategies()
         result = []
         for s in strategies:
@@ -560,9 +565,9 @@ class _DataCache:
                         futures["positions"] = pool.submit(self._fetch_positions, api)
                         futures["orders"] = pool.submit(self._fetch_orders_and_fills, api)
 
-                    # Slow tier (every 6 cycles = every ~12s)
-                    if cycle % 6 == 0:
-                        futures["strategies"] = pool.submit(self._fetch_strategies)
+                    # Slow tier (every 20 cycles = every ~30s) — tick + refresh strategies
+                    if cycle % 20 == 0:
+                        futures["strategies"] = pool.submit(self._tick_and_fetch_strategies, api)
 
                 # Collect results and update cache atomically
                 results = {}
