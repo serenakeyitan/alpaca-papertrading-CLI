@@ -16,3 +16,5 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: RENDER_EXTERNAL_URL
+        value: https://alpaca-dashboard-8jgz.onrender.com

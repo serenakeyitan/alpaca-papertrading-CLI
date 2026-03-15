@@ -174,17 +174,27 @@ class _DataCache:
         clock = api.get_clock()
 
         strat_pnl = strat_deployed = strat_allocated = strat_active = strat_total = 0
-        sm = _get_strategy_manager()
-        if sm:
-            try:
-                summary = sm.get_summary()
-                strat_pnl = summary.get("total_pnl", 0)
-                strat_deployed = summary.get("total_used", 0)
-                strat_allocated = summary.get("total_allocated", 0)
-                strat_active = summary.get("active_count", 0)
-                strat_total = summary.get("total_strategies", 0)
-            except Exception:
-                pass
+        # Derive strategy summary from cached strategies data (always available)
+        with self._lock:
+            cached_strats = self._data.get("strategies", [])
+        if cached_strats:
+            strat_total = len(cached_strats)
+            strat_active = sum(1 for s in cached_strats if s.get("status") == "active")
+            strat_pnl = sum(s.get("total_pnl", 0) for s in cached_strats)
+            strat_deployed = sum(s.get("used", 0) for s in cached_strats)
+            strat_allocated = sum(s.get("capital", 0) for s in cached_strats)
+        else:
+            sm = _get_strategy_manager()
+            if sm:
+                try:
+                    summary = sm.get_summary()
+                    strat_pnl = summary.get("total_pnl", 0)
+                    strat_deployed = summary.get("total_used", 0)
+                    strat_allocated = summary.get("total_allocated", 0)
+                    strat_active = summary.get("active_count", 0)
+                    strat_total = summary.get("total_strategies", 0)
+                except Exception:
+                    pass
 
         return {
             "equity": equity,
@@ -357,8 +367,8 @@ class _DataCache:
             return []
         try:
             sm.tick_all(api)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[tick] Error ticking strategies: {e}", flush=True)
         strategies = sm.list_strategies()
         result = []
         for s in strategies:
@@ -600,6 +610,26 @@ class _DataCache:
 # Global cache instance — starts background refresh immediately on import
 _cache = _DataCache()
 _cache.start()
+
+
+# ── Self-ping keep-alive (prevents Render free-tier spin-down) ────
+def _keep_alive():
+    """Ping our own /api/account endpoint every 10 minutes to prevent
+    Render's free plan from spinning down the service due to inactivity."""
+    import urllib.request
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not render_url:
+        return  # not on Render, skip
+    ping_url = f"{render_url}/api/account"
+    while True:
+        _time.sleep(600)  # 10 minutes
+        try:
+            urllib.request.urlopen(ping_url, timeout=10)
+        except Exception:
+            pass
+
+_keep_alive_thread = threading.Thread(target=_keep_alive, daemon=True)
+_keep_alive_thread.start()
 
 
 # ── API endpoints (serve from cache — instant) ─────────────
