@@ -141,8 +141,8 @@ def test_skill_md_content():
     check("No /root/ paths", "/root/" not in skill_md, "Has /root/ path (Linux-specific)")
     check("No hardcoded home dirs", "/home/" not in skill_md)
 
-    # Should mention Cloudflare tunnel
-    check("Mentions Cloudflare tunnel", "cloudflare" in skill_md.lower())
+    # Should mention Render deployment
+    check("Mentions Render deployment", "render" in skill_md.lower())
 
     # Should mention market hours
     check("Mentions market hours/closed", "mkt closed" in skill_md.lower() or "market" in skill_md.lower())
@@ -174,6 +174,7 @@ def test_required_files():
         ".gitignore",
         "run.sh",
         "scripts/install.sh",
+        "scripts/deploy.sh",
         "scripts/start-web.sh",
         "scripts/auto-tick.py",
     ]
@@ -256,8 +257,8 @@ def test_marketplace_entry():
         check("Has keywords", "keywords" in data and len(data["keywords"]) > 0)
         check("Has category", "category" in data)
 
-        # Version should be 0.2.0 for this release
-        check("Version is 0.2.0", data.get("version") == "0.2.0",
+        # Version should be 0.3.0 for this release
+        check("Version is 0.3.0", data.get("version") == "0.3.0",
               f"Got: {data.get('version')}")
 
         # Name matches SKILL.md
@@ -333,7 +334,7 @@ def test_gitignore():
         ("*.pyc", "*.pyc"),
         (".venv", ".venv" if ".venv" in gi else "venv"),
         ("*.log", "*.log"),
-        ("strategies_state.json", "strategies_state"),
+        ("grid_state.json", "grid_state"),
     ]
     for name, pattern in patterns:
         check(f"Ignores {name}", pattern in gi, f"Pattern '{pattern}' not in .gitignore")
@@ -420,6 +421,7 @@ def test_cross_references():
         "marketplace-entry.json",
         "strategies/",
         "scripts/install.sh",
+        "scripts/deploy.sh",
         "scripts/start-web.sh",
         "scripts/auto-tick.py",
     ]
@@ -507,9 +509,9 @@ def test_no_artifacts():
     pyc_files = list(SKILL_DIR.glob("**/*.pyc"))
     check("No .pyc files", len(pyc_files) == 0, f"Found {len(pyc_files)}")
 
-    # No state files committed
-    check("No strategies_state.json",
-          not (SKILL_DIR / "strategies_state.json").exists())
+    # strategies_state.json is now committed (needed for Render deployment)
+    check("strategies_state.json present",
+          (SKILL_DIR / "strategies_state.json").exists())
     check("No grid_state.json",
           not (SKILL_DIR / "grid_state.json").exists())
     check("No .venv/", not (SKILL_DIR / ".venv").exists())

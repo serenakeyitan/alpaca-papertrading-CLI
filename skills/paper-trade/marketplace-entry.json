@@ -2,7 +2,7 @@
   "name": "alpaca-papertrading",
   "source": "./plugins/serenakeyitan/alpaca-papertrading",
   "description": "Paper trade stocks and crypto via Alpaca from the terminal. Includes a live web dashboard, 6 built-in strategies with auto-tick, drag-and-drop panel layout, and full CLI for orders, positions, market data, and analytics.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "serenakeyitan"
   },

@@ -48,7 +48,8 @@ The user will speak in natural language. Map their intent to actions:
 | "run DCA $200 into SPY" | `alpaca strategy run dca -p symbol=SPY -p amount=200` |
 | "rebalance 50% AAPL 50% MSFT" | `alpaca strategy run rebalance -p 'targets={"AAPL":0.5,"MSFT":0.5}'` |
 | "open the dashboard" | Dashboard is always running — just show the link (see Auto-Start Dashboard) |
-| "share dashboard link" | Show the Render deployment URL |
+| "share dashboard link" | Show the Render deployment URL from `~/.alpaca-cli/deploy.json` |
+| "deploy dashboard" | `bash scripts/deploy.sh` (one-click Render deploy) |
 | "start auto-trading" | Set up cron with `scripts/auto-tick.py` |
 
 ## Setup
@@ -269,6 +270,7 @@ alpaca
 | Script | Purpose |
 |--------|---------|
 | `scripts/install.sh` | One-command installation (symlink + pip install) |
+| `scripts/deploy.sh` | Deploy to Render or show existing deployment URL |
 | `scripts/start-web.sh` | Launch web dashboard locally |
 | `scripts/auto-tick.py` | Cron-compatible script to tick all active strategies |
 | `run.sh` | Terminal dashboard launcher with auto-restart |
