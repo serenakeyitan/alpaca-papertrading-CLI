@@ -360,6 +360,14 @@ class _DataCache:
 
         return result
 
+    def _read_strategies(self):
+        """Read strategy state from disk (no tick, no API calls)."""
+        sm = _get_strategy_manager()
+        if not sm:
+            return []
+        strategies = sm.list_strategies()
+        return self._format_strategies(strategies)
+
     def _tick_and_fetch_strategies(self, api):
         """Tick all active strategies, then return their current state."""
         sm = _get_strategy_manager()
@@ -370,6 +378,9 @@ class _DataCache:
         except Exception as e:
             print(f"[tick] Error ticking strategies: {e}", flush=True)
         strategies = sm.list_strategies()
+        return self._format_strategies(strategies)
+
+    def _format_strategies(self, strategies):
         result = []
         for s in strategies:
             last_tick = ""
@@ -538,10 +549,11 @@ class _DataCache:
         doesn't stack (~500ms total instead of ~2100ms sequential).
 
         Keeps total API calls under Alpaca's 200/min rate limit:
-        - Fast (2s):   account + watchlist prices    → 5 calls × 30/min = 150
-        - Normal (4s): positions, orders, fills      → 3 calls × 15/min =  45
-        - Slow (12s):  strategies                    → 1 call  ×  5/min =   5
-        Total: ~200 calls/min (at limit; strategy call is conditional)
+        - Fast  (3s):  account + watchlist prices     → 5 calls × 20/min = 100
+        - Normal (6s): positions, orders, fills       → 3 calls × 10/min =  30
+        - Read  (6s):  strategy state from disk       → 0 API calls
+        - Tick (30s):  tick_all + strategy state      → ~18 calls × 2/min = 36
+        Total: ~166 calls/min (34 headroom for CLI commands)
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -566,17 +578,21 @@ class _DataCache:
                 # ── Parallel fetch: fire all calls for this cycle concurrently ──
                 futures = {}
                 with ThreadPoolExecutor(max_workers=6) as pool:
-                    # Fast tier (every cycle = every 2s)
+                    # Fast tier (every cycle = every 3s)
                     futures["account"] = pool.submit(self._fetch_account, api)
                     futures["watchlist"] = pool.submit(self._fetch_watchlist, cfg)
 
-                    # Normal tier (every 2 cycles = every ~4s)
+                    # Normal tier (every 2 cycles = every ~6s)
                     if cycle % 2 == 0:
                         futures["positions"] = pool.submit(self._fetch_positions, api)
                         futures["orders"] = pool.submit(self._fetch_orders_and_fills, api)
 
-                    # Slow tier (every 20 cycles = every ~30s) — tick + refresh strategies
-                    if cycle % 20 == 0:
+                    # Strategy read (every 2 cycles = every ~6s, zero API calls)
+                    if cycle % 2 == 1:
+                        futures["strategies"] = pool.submit(self._read_strategies)
+
+                    # Strategy tick (every 10 cycles = every ~30s, ~18 API calls)
+                    if cycle % 10 == 0:
                         futures["strategies"] = pool.submit(self._tick_and_fetch_strategies, api)
 
                 # Collect results and update cache atomically
@@ -604,7 +620,7 @@ class _DataCache:
                 pass  # keep last good data on transient errors
 
             cycle += 1
-            _time.sleep(1.5)
+            _time.sleep(3)
 
 
 # Global cache instance — starts background refresh immediately on import
