@@ -186,14 +186,6 @@ class _DataCache:
             except Exception:
                 pass
 
-        tunnel_url = ""
-        tunnel_file = SKILL_DIR / ".tunnel_url"
-        if tunnel_file.exists():
-            try:
-                tunnel_url = tunnel_file.read_text().strip()
-            except Exception:
-                pass
-
         return {
             "equity": equity,
             "cash": float(acct.cash),
@@ -207,7 +199,6 @@ class _DataCache:
             "strat_allocated": strat_allocated,
             "strat_active": strat_active,
             "strat_total": strat_total,
-            "tunnel_url": tunnel_url,
         }
 
     def _fetch_positions(self, api):
@@ -1007,7 +998,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <span id="tick-count">tick #0</span>
   <span class="sep">│</span>
   <span id="status-time"></span>
-  <span id="tunnel-url" style="margin-left:auto;"></span>
 </div>
 
 <script>
@@ -1094,10 +1084,6 @@ async function refreshAccount() {
   $('title-market').textContent = d.market_open ? 'OPEN' : 'CLOSED';
   marketOpen = d.market_open;
 
-  // Show tunnel URL in status bar
-  if (d.tunnel_url) {
-    $('tunnel-url').innerHTML = `<a href="${d.tunnel_url}" target="_blank" style="color:var(--accent);text-decoration:none;">${d.tunnel_url}</a>`;
-  }
 }
 
 // ── Watchlist — columns: #, MARKET, Price, Chg, Trend ──
@@ -1426,8 +1412,8 @@ def _run_with_reload(host, port):
 
     Uses a subprocess approach: the parent process watches for file changes
     and restarts the child server process when .py files are modified.
-    The tunnel (ngrok/cloudflared) runs independently on the same port,
-    so code changes go live without breaking the public URL.
+    Uses a subprocess approach: the parent process watches for file changes
+    and restarts the child server process when .py files are modified.
     """
     import os
     import socket
@@ -1550,7 +1536,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0",
                         help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--reload", action="store_true",
-                        help="Auto-reload on file changes (tunnel stays alive)")
+                        help="Auto-reload on file changes")
     args = parser.parse_args()
 
     # If --reload and not the child process, run the watcher
@@ -1562,7 +1548,7 @@ if __name__ == "__main__":
             print(f"  ─────────────────────────────────")
             print(f"  Local:  http://{args.host}:{args.port}")
             print(f"  Cache:  background refresh every 2s")
-            print(f"  Tip:    Run 'bash scripts/start-web.sh' for auto-tunnel\n")
+            print(f"  Tip:    Deploy to Render for a permanent public URL\n")
 
         from waitress import serve
         serve(app, host=args.host, port=args.port)

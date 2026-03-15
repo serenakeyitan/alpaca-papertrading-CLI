@@ -45,8 +45,7 @@ flowchart TB
     subgraph Deploy["Deployment Options"]
         direction LR
         Local["Local\npython web_dashboard.py\nlocalhost:8888"]
-        Tunnel["Local + Tunnel\nngrok / cloudflared\npermanent public URL"]
-        Cloud["Cloud (Render)\nrender.yaml blueprint\nalways-on, auto-deploy"]
+        Tunnel["Cloud (Render)\nrender.yaml blueprint\npermanent public URL"]
     end
 ```
 
@@ -61,7 +60,7 @@ flowchart TB
 - **6 built-in strategies** -- Grid, DCA, Momentum, Mean Reversion, Dip Buyer, Momentum Scalper
 - **Full CLI** -- `alpaca` Click command with market/limit/stop/bracket orders, positions, analytics
 - **Stocks and crypto** -- separate API paths for equities (v2) and crypto (v1beta3)
-- **Auto-reload** -- `--reload` flag watches `.py`/`.json` files; tunnel stays alive through restarts
+- **Auto-reload** -- `--reload` flag watches `.py`/`.json` files and restarts automatically
 - **Paper only** -- hardcoded to `paper-api.alpaca.markets` for safety
 
 ---
@@ -85,20 +84,7 @@ python web_dashboard.py --port 8888
 # Open http://localhost:8888
 ```
 
-### 2. Local + permanent link (ngrok)
-
-```bash
-# One-time: claim a free static ngrok domain
-bash scripts/setup-link.sh
-
-# Start dashboard with tunnel
-bash scripts/start-web.sh
-# Outputs a permanent https://*.ngrok-free.app URL
-```
-
-If ngrok is not configured, the start script falls back to a temporary Cloudflare tunnel automatically.
-
-### 3. Cloud deploy (Render)
+### 2. Cloud deploy (Render)
 
 No local process needed. The repo includes a `render.yaml` blueprint:
 
@@ -177,7 +163,7 @@ flowchart TD
 - **Thread-safe reads** -- `_DataCache.get()` acquires a lock, copies the value, and returns. Response time is sub-millisecond.
 - **SQLite persistence** -- the trade log survives process restarts. On startup, the last 200 entries are loaded from `dashboard_cache.db`.
 - **Atomic updates** -- each tier writes its results under the lock in one batch, so the browser never sees a half-updated state.
-- **Auto-reload** -- when run with `--reload`, the server watches for file changes and restarts the child process. The tunnel (ngrok/cloudflared) binds to the port, not the PID, so the public URL survives reloads.
+- **Auto-reload** -- when run with `--reload`, the server watches for file changes and restarts the child process automatically.
 
 ---
 

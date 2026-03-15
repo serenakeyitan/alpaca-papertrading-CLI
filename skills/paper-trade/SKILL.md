@@ -48,8 +48,7 @@ The user will speak in natural language. Map their intent to actions:
 | "run DCA $200 into SPY" | `alpaca strategy run dca -p symbol=SPY -p amount=200` |
 | "rebalance 50% AAPL 50% MSFT" | `alpaca strategy run rebalance -p 'targets={"AAPL":0.5,"MSFT":0.5}'` |
 | "open the dashboard" | Dashboard is always running — just show the link (see Auto-Start Dashboard) |
-| "share dashboard link" | Show the ngrok/tunnel URL from `.tunnel_url` |
-| "get a permanent link" | `bash scripts/setup-link.sh` (free ngrok static domain) |
+| "share dashboard link" | Show the Render deployment URL |
 | "start auto-trading" | Set up cron with `scripts/auto-tick.py` |
 
 ## Setup
@@ -96,53 +95,32 @@ Config lives at `~/.alpaca-cli/config.json` or `skills/paper-trade/config.json`:
 lsof -ti :8888 >/dev/null 2>&1 && echo "RUNNING" || echo "STOPPED"
 ```
 
-### Step 2: Check if ngrok tunnel is already running
-```bash
-curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null | python3 -c "import sys,json; t=json.load(sys.stdin)['tunnels']; print(t[0]['public_url'] if t else '')" 2>/dev/null || echo ""
-```
-Also check the `.tunnel_url` file:
-```bash
-cat skills/paper-trade/.tunnel_url 2>/dev/null || echo ""
-```
-
-### Step 3: Start what's missing
+### Step 2: Start if not running
 - If dashboard is NOT running: start it with auto-reload in the background
   ```bash
   cd skills/paper-trade && .venv/bin/python web_dashboard.py --port 8888 --reload &>/tmp/openclaw-dashboard.log &
   ```
-- If tunnel is NOT running AND a permanent ngrok config exists (`~/.alpaca-cli/tunnel.json`):
-  ```bash
-  DOMAIN=$(python3 -c "import json; print(json.load(open('$HOME/.alpaca-cli/tunnel.json')).get('domain',''))" 2>/dev/null)
-  ngrok http 8888 --url="$DOMAIN" --log=stdout --log-format=json >/tmp/ngrok-dashboard.log 2>&1 &
-  echo "https://$DOMAIN" > skills/paper-trade/.tunnel_url
-  ```
-- If no ngrok config exists, use cloudflared quick tunnel (temporary):
-  ```bash
-  cloudflared tunnel --url http://127.0.0.1:8888 --no-autoupdate 2>/tmp/cloudflared-tunnel.log &
-  # wait for URL, write to .tunnel_url
-  ```
 
-### Step 4: Show the link to the user
+### Step 3: Show the link to the user
 Always show the user their dashboard link at the start of the session:
 ```
-📊 Dashboard live at: https://<their-url>
+📊 Dashboard live at: https://<their-render-url>.onrender.com
    (auto-refreshes every 5s — all trades and price changes appear in real time)
 ```
-The URL may be a Render deployment (`*.onrender.com`), ngrok permanent link, or Cloudflare temporary link.
+The URL is the Render deployment (`*.onrender.com`).
 
 ### Key behaviors:
-- **Never kill the tunnel** — the dashboard and tunnel run independently of the agent. When the user asks to buy, sell, or run strategies, just execute the CLI commands. The dashboard auto-refreshes from Alpaca APIs every 5 seconds, so all changes appear automatically.
-- **No restart needed for trades** — executing trades, adding strategies, or changing positions does NOT require restarting the dashboard or tunnel. The dashboard polls live data.
-- **Code changes auto-reload** — the dashboard runs with `--reload` by default. When the user edits `web_dashboard.py` (new API endpoints, restructured UI, changed data sources), the dashboard process automatically detects the file change and restarts within ~2 seconds. The ngrok/cloudflared tunnel stays alive because it binds to the port, not the process. The public URL never changes.
+- **No restart needed for trades** — executing trades, adding strategies, or changing positions does NOT require restarting the dashboard. The dashboard polls live data.
+- **Code changes auto-reload** — the dashboard runs with `--reload` by default. When the user edits `web_dashboard.py` (new API endpoints, restructured UI, changed data sources), the dashboard process automatically detects the file change and restarts within ~2 seconds.
 - **What auto-reloads**: any `.py` or `.json` file change in the skill directory triggers a reload. This covers: new API routes, changed HTML/CSS/JS (embedded in web_dashboard.py), modified strategy logic, updated watchlist, etc.
 - **What does NOT need reload**: trade executions, position changes, price updates — these come from Alpaca's live APIs and are fetched fresh every 5 seconds.
-- **If no permanent link is set up**, recommend deploying to Render (free, always online, auto-deploys on git push). Alternatively, `bash scripts/setup-link.sh` for a local ngrok link.
+- **Deployment**: the dashboard is deployed to Render (free, always online, auto-deploys on git push).
 
 ### When the user asks to modify the dashboard:
 1. Edit the code (web_dashboard.py, strategies, etc.)
 2. Save the file — the reload happens automatically in ~2 seconds
 3. Tell the user to refresh the browser (or wait for the next 5-second auto-refresh cycle)
-4. The ngrok/tunnel link stays exactly the same — no need to touch it
+4. Commit and push — Render auto-deploys
 
 ## Web Dashboard
 
@@ -150,10 +128,8 @@ A Bloomberg-style live dashboard accessible from any browser. Shows account over
 
 ### Launch (Local)
 ```bash
-bash scripts/setup-link.sh              # one-time: set up permanent public link (free)
-bash scripts/start-web.sh              # default port 8888, with tunnel
+bash scripts/start-web.sh              # default port 8888
 bash scripts/start-web.sh --port 9000  # custom port
-bash scripts/start-web.sh --no-tunnel  # localhost only
 ```
 
 ### Deploy to Cloud (Render — free, recommended)
@@ -175,8 +151,7 @@ Every `git push` auto-deploys the latest code. No tunnels, no local processes ne
 - **Panel swap**: drag any panel onto another to swap positions (works across rows)
 - **Panel resize**: drag dividers to resize horizontally and vertically
 - **Layout persistence**: panel positions and sizes saved to localStorage
-- **Permanent public link**: run `bash scripts/setup-link.sh` to claim a free static domain via ngrok (never changes)
-- **Cloudflare tunnel fallback**: auto-generates a temporary public URL if no permanent link is set up
+- **Render deployment**: permanent public URL via Render (free, auto-deploys on git push)
 - **Crypto + stock data**: separate API endpoints for crypto (v1beta3) vs stock (v2) data
 - **Local timezone**: all timestamps converted from UTC to user's local time
 - **Market status**: shows "MKT CLOSED" for stock strategies when market is closed
@@ -294,8 +269,7 @@ alpaca
 | Script | Purpose |
 |--------|---------|
 | `scripts/install.sh` | One-command installation (symlink + pip install) |
-| `scripts/setup-link.sh` | One-time setup for permanent public link (free ngrok static domain) |
-| `scripts/start-web.sh` | Launch web dashboard with tunnel (ngrok permanent or Cloudflare temporary) |
+| `scripts/start-web.sh` | Launch web dashboard locally |
 | `scripts/auto-tick.py` | Cron-compatible script to tick all active strategies |
 | `run.sh` | Terminal dashboard launcher with auto-restart |
 
