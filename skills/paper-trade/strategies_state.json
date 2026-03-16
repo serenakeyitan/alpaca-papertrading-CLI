@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-03-15T19:01:34.173707+00:00",
+  "updated_at": "2026-03-15T19:40:56.966810+00:00",
   "strategies": [
     {
       "name": "eth-grid",
       "type": "grid",
       "status": "active",
       "capital_allocated": 10963.07435287825,
-      "capital_used": 92215.34142885965,
+      "capital_used": 92293.48669355232,
       "realized_pnl": 1013.9499999999965,
-      "unrealized_pnl": -1326.287288,
+      "unrealized_pnl": -1248.142023,
       "total_fills": 716,
       "orders": [
         "grid_eth-grid_g-5_1773351472",
@@ -69,7 +69,7 @@
       "created_at": "2026-03-12 17:43:44.473862+00:00",
       "started_at": "2026-03-12 17:43:44.473862+00:00",
       "duration_minutes": 0,
-      "last_tick": "2026-03-15T19:01:31.917984+00:00",
+      "last_tick": "2026-03-15T19:40:54.605643+00:00",
       "error_msg": "",
       "config": {
         "symbol": "ETH/USD",
@@ -1839,7 +1839,7 @@
       "created_at": "2026-03-12T21:37:42.225503+00:00",
       "started_at": "2026-03-12T21:37:54.172219+00:00",
       "duration_minutes": 0,
-      "last_tick": "2026-03-15T19:01:32.782762+00:00",
+      "last_tick": "2026-03-15T19:40:55.564360+00:00",
       "error_msg": "",
       "config": {
         "symbol": "NVDA",
@@ -2682,7 +2682,7 @@
       "created_at": "2026-03-12T21:37:42.225855+00:00",
       "started_at": "2026-03-12T21:37:54.392146+00:00",
       "duration_minutes": 0,
-      "last_tick": "2026-03-15T19:01:33.477750+00:00",
+      "last_tick": "2026-03-15T19:40:56.170374+00:00",
       "error_msg": "",
       "config": {
         "symbol": "AAPL",
@@ -3414,7 +3414,7 @@
       "created_at": "2026-03-12T21:37:42.226016+00:00",
       "started_at": "2026-03-12T21:37:54.584566+00:00",
       "duration_minutes": 0,
-      "last_tick": "2026-03-15T19:01:33.816748+00:00",
+      "last_tick": "2026-03-15T19:40:56.597612+00:00",
       "error_msg": "",
       "config": {
         "symbol": "QQQ",
